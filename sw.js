@@ -1,9 +1,11 @@
 // Makes the app open with no network. Bump VERSION whenever a listed file changes.
-const VERSION = 'quickds-v7';
+const VERSION = 'quickds-v8';
 const FILES = ['./', 'index.html', 'styles.css', 'manifest.webmanifest', 'js/app.js', 'js/engine.js', 'js/seed.js', 'js/store.js', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(VERSION).then((cache) => cache.addAll(FILES)).then(() => self.skipWaiting()));
+  // The browser may hold old copies for minutes after a release, so go past its cache.
+  const fresh = FILES.map((file) => new Request(file, { cache: 'reload' }));
+  event.waitUntil(caches.open(VERSION).then((cache) => cache.addAll(fresh)).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (event) => {
