@@ -4,8 +4,9 @@
 // This key only names the project. The database rules are what keep each account's data private.
 const API_KEY = 'AIzaSyBYt8EsaKfIjghujhO9MlHVaV_TTqU5Zrw';
 const PROJECT = 'quickds-28e44';
-const APP_ID = '1:1052668817957:web:857b6bde2fe88df29285cc';
-const FIREBASE_SDK = 'https://www.gstatic.com/firebasejs/10.14.1';
+const GOOGLE_CLIENT_ID = '1052668817957-hj6bkgfickadabolmi0ktevgnaqm5mc0.apps.googleusercontent.com';
+const GOOGLE_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
+const GOOGLE_STATE_KEY = 'dd.google.state';
 const AUTH_URL = 'https://identitytoolkit.googleapis.com/v1/accounts';
 const TOKEN_URL = 'https://securetoken.googleapis.com/v1/token';
 const DB_URL = `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents`;
@@ -60,41 +61,66 @@ async function authenticate(action, email, password) {
 export const signIn = (email, password) => authenticate('signInWithPassword', email, password);
 export const signUp = (email, password) => authenticate('signUp', email, password);
 
-const GOOGLE_MESSAGES = {
-  'auth/popup-blocked': 'Your browser blocked the Google window. Allow pop-ups and try again.',
-  'auth/operation-not-allowed': 'Google sign-in is not switched on for this app yet.',
-  'auth/unauthorized-domain': 'Google sign-in is not allowed from this address yet.',
-  'auth/network-request-failed': 'No connection. Try again when you are online.',
-};
-const CLOSED_BY_USER = ['auth/popup-closed-by-user', 'auth/cancelled-popup-request', 'auth/user-cancelled'];
+const randomText = () => Array.from(crypto.getRandomValues(new Uint8Array(24)), (b) => b.toString(16).padStart(2, '0')).join('');
+const appAddress = () => new URL('./', location.href).href;
 
-// Google's window needs Firebase's own code. It loads only here, so the rest of the app has none of it.
-let googleAuth;
-async function loadGoogleAuth() {
+async function sha256(text) {
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// The whole page goes to Google and comes back here. Phones block the storage that pop-ups and
+// Firebase's own hand-off page rely on, and this route needs neither.
+export async function startGoogleSignIn() {
+  if (!navigator.onLine) throw fail('OFFLINE', 'No connection. Try again when you are online.');
+  const saved = { state: randomText(), nonce: randomText() };
   try {
-    const [app, auth] = await Promise.all([import(`${FIREBASE_SDK}/firebase-app.js`), import(`${FIREBASE_SDK}/firebase-auth.js`)]);
-    googleAuth ||= {
-      ...auth,
-      instance: auth.initializeAuth(app.initializeApp({ apiKey: API_KEY, authDomain: `${PROJECT}.firebaseapp.com`, projectId: PROJECT, appId: APP_ID }), {
-        persistence: auth.inMemoryPersistence, popupRedirectResolver: auth.browserPopupRedirectResolver,
-      }),
-    };
-    return googleAuth;
+    localStorage.setItem(GOOGLE_STATE_KEY, JSON.stringify(saved));
   } catch {
-    throw fail('OFFLINE', 'No connection. Try again when you are online.');
+    throw fail('STORAGE', 'This browser blocks storage, so Google sign-in cannot work here. Use your email instead.');
+  }
+  const query = new URLSearchParams({
+    client_id: GOOGLE_CLIENT_ID, redirect_uri: appAddress(), response_type: 'id_token', scope: 'openid email profile',
+    state: saved.state, nonce: await sha256(saved.nonce), prompt: 'select_account',
+  });
+  location.href = `${GOOGLE_URL}?${query}`;
+}
+
+function exchangeGoogleToken(token, nonce) {
+  return send(`${AUTH_URL}:signInWithIdp?key=${API_KEY}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      postBody: new URLSearchParams({ id_token: token, providerId: 'google.com', ...(nonce && { nonce }) }).toString(),
+      requestUri: appAddress(), returnSecureToken: true,
+    }),
+  });
+}
+
+function takeSavedGoogleState() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(GOOGLE_STATE_KEY));
+    localStorage.removeItem(GOOGLE_STATE_KEY);
+    return saved;
+  } catch {
+    return null;
   }
 }
 
-export async function signInWithGoogle() {
-  const auth = await loadGoogleAuth();
-  try {
-    const { user } = await auth.signInWithPopup(auth.instance, new auth.GoogleAuthProvider());
-    const { token, expirationTime } = await user.getIdTokenResult();
-    return { uid: user.uid, email: user.email, idToken: token, refreshToken: user.refreshToken, expiresAt: Date.parse(expirationTime) };
-  } catch (error) {
-    if (CLOSED_BY_USER.includes(error.code)) return null;
-    throw fail(error.code, GOOGLE_MESSAGES[error.code] || 'Could not sign in with Google. Try again.');
-  }
+// Runs when the page opens. Google's answer sits after the # in the address, so it is removed at once.
+export async function finishGoogleSignIn() {
+  const answer = new URLSearchParams(location.hash.slice(1));
+  if (!answer.has('id_token') && !answer.has('error')) return null;
+  history.replaceState(null, '', location.pathname + location.search);
+  const saved = takeSavedGoogleState();
+  if (answer.get('error') === 'access_denied') return null;
+  const token = answer.get('id_token');
+  if (!token || !saved || answer.get('state') !== saved.state) throw fail('GOOGLE', 'Google sign-in did not finish. Please try again.');
+  let result = await exchangeGoogleToken(token, saved.nonce);
+  if (!result.ok && /NONCE/.test(result.body.error?.message || '')) result = await exchangeGoogleToken(token);
+  if (result.ok) return toAccount(result.body, result.body.email);
+  const code = (result.body.error?.message || '').split(' ')[0];
+  throw fail(code, AUTH_MESSAGES[code] || 'Could not sign in with Google. Try again.');
 }
 
 export async function sendPasswordReset(email) {

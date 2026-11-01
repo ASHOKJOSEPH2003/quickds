@@ -1276,6 +1276,7 @@ function renderSignIn() {
       toast(error.message);
     }
   };
+  enter(Sync.finishGoogleSignIn);
   const withPassword = (action) => enter(() => action(E.cleanName(email.value), password.value));
   const forgot = async () => {
     if (!E.cleanName(email.value)) { email.focus(); toast('Type your email first.'); return; }
@@ -1290,7 +1291,7 @@ function renderSignIn() {
     h('h1', {}, 'QuickDS'),
     h('p', { class: 'hint' }, 'Sign in to write discharge summaries. Your library follows you to every device. Patient reports stay on the device and are never uploaded.'),
     h('section', { class: 'card', 'aria-label': 'Sign in' },
-      h('button', { class: 'btn', id: 'google-sign-in', type: 'button', onclick: () => enter(Sync.signInWithGoogle) }, 'Continue with Google'),
+      h('button', { class: 'btn', id: 'google-sign-in', type: 'button', onclick: () => enter(Sync.startGoogleSignIn) }, 'Continue with Google'),
       h('div', { class: 'or' }, 'or'),
       h('form', { class: 'column', onsubmit: (e) => { e.preventDefault(); withPassword(Sync.signIn); } },
         h('label', { class: 'field' }, 'Email', email),
@@ -1329,8 +1330,12 @@ function startApp() {
 }
 
 function boot() {
-  if (S.account) startApp();
-  else renderSignIn();
+  if (S.account) {
+    if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+    startApp();
+  } else {
+    renderSignIn();
+  }
   if (TEST_PHASE) showNotice('Testing version. Use example patients only, no real patient details.');
   Store.requestPersistence();
   window.addEventListener('storage', takeOtherTabData);

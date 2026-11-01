@@ -2,7 +2,7 @@
 
 Drafts discharge summaries from selected diagnoses and medicines, then produces plain text to paste into the hospital's existing system. It sits beside that system and does not connect to it.
 
-It runs in any browser, installs on a phone, and works with no internet. Everyone signs in with email or Google, which keeps their library safe online and shared across their devices. The app is plain HTML, CSS and JavaScript with no build step. Firebase's own code loads only for the Google sign-in window.
+It runs in any browser, installs on a phone, and works with no internet. Everyone signs in with email or Google, which keeps their library safe online and shared across their devices. The app is plain HTML, CSS and JavaScript with no dependencies and no build step.
 
 ## Using it
 
@@ -87,7 +87,7 @@ The account saves the library to Firebase for use on other devices. The library 
 - Each account has one library, at `users/{uid}/library/main`, stored as a single document.
 - Sync is automatic. A device syncs when it opens or regains focus, when it comes back online, 2 seconds after a library change, and every 30 seconds while it is on screen. The top bar shows the state. With no connection it keeps working and catches up later.
 - Each device remembers the library as it stood after its last sync, and compares both sides to that. A change made on one side carries over, including deletions. When both sides changed the same text, both wordings are kept as versions.
-- Google sign-in needs the Google provider turned on in Firebase Authentication, and the site's address listed under Authorized domains.
+- Google sign-in sends the whole page to Google and back, because phones block the storage that pop-ups rely on. It needs the Google provider turned on in Firebase Authentication, and each site address listed under Authorized redirect URIs on the OAuth web client in Google Cloud. Those addresses end with a slash, such as `https://ashokjoseph2003.github.io/quickds/`.
 - The web API key in `js/sync.js` only names the project and is safe to publish. These Firestore rules are what protect the data:
 
 ```
