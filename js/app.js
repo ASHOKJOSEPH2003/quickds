@@ -10,6 +10,8 @@ const PLACEHOLDERS = '{name} {age} {sex} {hospitalNo} {mrd} {unit} {ward} {admit
 const CREATE_TYPE = '__create_type';
 // Set to false only after the hospital approves use with real patients.
 const TEST_PHASE = true;
+const SYNC_AFTER_EDIT_MS = 2000;
+const SYNC_CHECK_MS = 30000;
 
 const signedIn = Store.loadAccount();
 if (signedIn) Store.useAccount(signedIn.uid);
@@ -28,6 +30,7 @@ const S = {
   diagQuery: '',
   account: signedIn,
   syncStatus: '',
+  syncBadge: '',
 };
 
 // ---------- Small helpers ----------
@@ -95,12 +98,16 @@ let syncedRaw = '';
 
 function syncSoon() {
   if (!S.account || JSON.stringify(S.lib) === syncedRaw) return;
+  showSyncStatus('Saving', 'Saving your library.');
   clearTimeout(syncTimer);
-  syncTimer = setTimeout(syncLibrary, 5000);
+  syncTimer = setTimeout(syncLibrary, SYNC_AFTER_EDIT_MS);
 }
 
-function showSyncStatus(text) {
+function showSyncStatus(badge, text) {
+  S.syncBadge = badge;
   S.syncStatus = text;
+  const shown = byId('sync-badge');
+  if (shown) shown.textContent = badge;
   const status = byId('sync-status');
   if (status) status.textContent = text;
 }
@@ -112,22 +119,26 @@ function useLibrary(lib) {
   render();
 }
 
+const showOffline = () => showSyncStatus('Offline', 'Offline. Your library will sync when you reconnect.');
+
 function syncFailed(error) {
   if (error.code === 'SIGNED_OUT') {
     signOut();
   } else if (error.code === 'OFFLINE') {
-    showSyncStatus('Offline. Your library will sync when you reconnect.');
+    showOffline();
   } else {
-    showSyncStatus(`${error.message} Your library is safe on this device.`);
+    showSyncStatus('Waiting', `${error.message} Your library is safe on this device and will sync automatically.`);
   }
 }
 
 // Brings this device and the online copy together. Changes made on only one side carry over,
 // and when both sides changed the same text, both wordings are kept.
 async function syncLibrary(retry = true) {
-  if (!S.account || syncing || !navigator.onLine) return;
+  if (!S.account || syncing) return;
+  if (!navigator.onLine) { showOffline(); return; }
   syncing = true;
   clearTimeout(syncTimer);
+  syncTimer = 0;
   let tryAgain = false;
   try {
     S.account = await Sync.freshAccount(S.account);
@@ -138,15 +149,19 @@ async function syncLibrary(retry = true) {
       E.copySyncIds(S.lib, merged);
       Store.saveLibrary(S.lib);
     } else if (isBusy()) {
-      syncTimer = setTimeout(syncLibrary, 5000);
+      syncTimer = setTimeout(syncLibrary, SYNC_AFTER_EDIT_MS);
       return;
     } else {
       useLibrary(merged);
     }
+    // Taken before the upload, so an edit made while it runs still counts as new.
+    const uploaded = JSON.stringify(merged);
+    const current = JSON.stringify(S.lib);
     if (!remote || !E.sameLibrary(merged, remote.library)) await Sync.writeLibrary(S.account, merged, remote?.updateTime);
-    Store.saveSynced(merged);
-    syncedRaw = JSON.stringify(S.lib);
-    showSyncStatus('Library synced just now.');
+    Store.saveSynced(JSON.parse(uploaded));
+    syncedRaw = current;
+    showSyncStatus('Synced', 'Library synced automatically.');
+    syncSoon();
   } catch (error) {
     if (error.code === 'CONFLICT' && retry) tryAgain = true;
     else syncFailed(error);
@@ -274,6 +289,7 @@ function render() {
   byId('app').replaceChildren(
     h('header', { class: 'topbar' }, h('div', { class: 'topbar-inner' },
       h('div', { class: 'brand' }, 'QuickDS'),
+      h('span', { class: 'sync-badge', id: 'sync-badge', role: 'status', 'aria-label': 'Library sync' }, S.syncBadge),
       h('nav', { class: 'nav', 'aria-label': 'Main' }, nav.map(([view, label]) =>
         h('button', { type: 'button', onclick: () => go(view), 'aria-current': S.view === view ? 'page' : null }, label))))),
     views[S.view](),
@@ -464,7 +480,7 @@ function renderChips() {
 
 function sourceOptions() {
   return [[SOURCE.NONE, 'Blank'], [SOURCE.DIAGNOSES, 'Diagnosis line'], [SOURCE.SUMMARY, 'Auto summary'],
-    ...S.lib.types.map((t) => [t.id, t.name]), [SOURCE.MEDICINES, 'Prescription'], [CREATE_TYPE, '+ New kind of text…']];
+    ...S.lib.types.filter((t) => !t.own).map((t) => [t.id, t.name]), [SOURCE.MEDICINES, 'Prescription'], [CREATE_TYPE, '+ New kind of text…']];
 }
 
 function sourceSelect(value, onChange, id) {
@@ -483,7 +499,10 @@ async function createType(suggestion = '') {
   const name = await promptText('New kind of text', 'Name, for example Warning signs', suggestion);
   if (!name) return null;
   const existing = E.findExact(S.lib.types, name);
-  if (existing) return existing.id;
+  if (existing) {
+    delete existing.own;
+    return existing.id;
+  }
   const type = { id: `t-${E.uid()}`, name };
   S.lib.types.push(type);
   saveSoon();
@@ -515,10 +534,13 @@ async function deleteSection(section) {
   if (hasText && !await confirmAction(`Delete the "${section.title}" section and its text?`)) return;
   const snapshot = JSON.stringify(S.report.sections);
   S.report.sections = S.report.sections.filter((s) => s !== section);
+  S.report.dismissed ||= [];
+  if (section.auto) S.report.dismissed.push(section.source);
   touchReport();
   refreshAll();
   toast(`Removed ${section.title}.`, () => {
     S.report.sections = JSON.parse(snapshot);
+    S.report.dismissed = S.report.dismissed.filter((id) => id !== section.source);
     touchReport();
     refreshAll();
   });
@@ -538,7 +560,7 @@ function renderSection(section, index) {
         class: 'sec-title', type: 'text', id: `title-${section.id}`, value: section.title, 'aria-label': 'Section name',
         oninput: (e) => { section.title = e.target.value; refreshAfterEdit(); },
       }),
-      sourceSelect(section.source, (e) => changeSource(section, e.target.value), `source-${section.id}`),
+      section.auto ? h('span', { class: 'tag' }, 'For this diagnosis') : sourceSelect(section.source, (e) => changeSource(section, e.target.value), `source-${section.id}`),
       h('div', { class: 'sec-tools' },
         h('button', { class: 'icon', type: 'button', disabled: index === 0, 'aria-label': `Move ${section.title} up`, onclick: () => moveSection(index, -1) }, '↑'),
         h('button', { class: 'icon', type: 'button', disabled: index === count - 1, 'aria-label': `Move ${section.title} down`, onclick: () => moveSection(index, 1) }, '↓'),
@@ -1034,6 +1056,48 @@ function renderDiagnosisEditor() {
       }, '+ Add a version'));
   };
 
+  const restoreEarlier = (entry) => {
+    const removed = entry.title && !diag.sections?.includes(entry.typeId);
+    const typeId = removed ? E.addDiagnosisSection(S.lib, diag.id, entry.title)?.id : entry.typeId;
+    if (typeId) E.setDefaultText(S.lib, diag.id, typeId, entry.text, by);
+  };
+  const addOwnSection = async () => {
+    const name = await promptText('New section', 'Section name, for example Insulin plan');
+    if (!name) return;
+    if (E.addDiagnosisSection(S.lib, diag.id, name)) rerender();
+    else toast(`This diagnosis already has "${name}".`);
+  };
+  const moveOwnSection = (index, step) => {
+    const [typeId] = diag.sections.splice(index, 1);
+    diag.sections.splice(index + step, 0, typeId);
+    rerender();
+  };
+  const ownSectionCard = (typeId, index) => {
+    const type = S.lib.types.find((t) => t.id === typeId);
+    if (!type) return null;
+    const card = textCard(type);
+    card.querySelector('h2').replaceWith(h('div', { class: 'sec-head own-head' },
+      h('input', {
+        class: 'sec-title', type: 'text', id: `own-title-${typeId}`, value: type.name, 'aria-label': 'Section name',
+        onchange: (e) => {
+          if (E.renameDiagnosisSection(S.lib, diag.id, typeId, e.target.value)) rerender();
+          else { e.target.value = type.name; toast('That name is empty or already used here.'); }
+        },
+      }),
+      h('div', { class: 'sec-tools' },
+        h('button', { class: 'icon', type: 'button', disabled: index === 0, 'aria-label': `Move ${type.name} up`, onclick: () => moveOwnSection(index, -1) }, '↑'),
+        h('button', { class: 'icon', type: 'button', disabled: index === diag.sections.length - 1, 'aria-label': `Move ${type.name} down`, onclick: () => moveOwnSection(index, 1) }, '↓'),
+        h('button', {
+          class: 'icon', type: 'button', 'aria-label': `Delete ${type.name}`,
+          onclick: async () => {
+            if (!await confirmAction(`Delete "${type.name}" from ${diag.name}? Its text moves to Earlier text.`)) return;
+            E.removeDiagnosisSection(S.lib, diag.id, typeId);
+            rerender();
+          },
+        }, '×'))));
+    return card;
+  };
+
   const medRow = (med) => h('div', { class: 'med' },
     h('div', { class: 'med-top' },
       h('input', { class: 'med-name', type: 'text', value: med.name, 'aria-label': 'Medicine name', onchange: (e) => saveName(med, diag.meds, e.target.value, e.target) }),
@@ -1054,7 +1118,9 @@ function renderDiagnosisEditor() {
         onchange: (e) => { diag.aliases = e.target.value.split(',').map(E.cleanName).filter(Boolean); saveSoon(); },
       }))),
     textCard({ id: SOURCE.SUMMARY, name: 'Summary note' }, 'Write only what is specific to this diagnosis, such as the treatment given. It goes between the shared opening and closing sentences, so do not repeat the age, dates or medicines. Words in curly brackets are filled in for each patient.'),
-    S.lib.types.map((type) => textCard(type)),
+    S.lib.types.filter((type) => !type.own).map((type) => textCard(type)),
+    (diag.sections || []).map(ownSectionCard),
+    h('button', { class: 'btn', id: 'add-diag-section', type: 'button', style: 'justify-self:start', onclick: addOwnSection }, '+ Add a section for this diagnosis'),
     h('section', { class: 'card', 'aria-label': 'Default prescription' },
       h('h2', {}, 'Default prescription'),
       h('p', { class: 'hint' }, 'These are added automatically when this diagnosis is selected.'),
@@ -1062,9 +1128,9 @@ function renderDiagnosisEditor() {
       medicinePicker((med) => { E.setDiagnosisMedicine(S.lib, diag.id, med); rerender(); }, 'diag-med-picker')),
     earlier.length > 0 && h('details', { class: 'card' }, h('summary', {}, `Earlier text (${earlier.length})`),
       h('div', { class: 'column' }, earlier.map((entry) => h('div', { class: 'change' },
-        h('span', { class: 'hint' }, `${entry.typeId === SOURCE.SUMMARY ? 'Summary note' : S.lib.types.find((t) => t.id === entry.typeId)?.name || 'Text'}, ${new Date(entry.at).toLocaleDateString('en-IN')}${entry.by ? `, ${entry.by}` : ''}`),
+        h('span', { class: 'hint' }, `${entry.typeId === SOURCE.SUMMARY ? 'Summary note' : entry.title || S.lib.types.find((t) => t.id === entry.typeId)?.name || 'Text'}, ${new Date(entry.at).toLocaleDateString('en-IN')}${entry.by ? `, ${entry.by}` : ''}`),
         h('div', {}, entry.text),
-        h('div', {}, h('button', { class: 'btn small', type: 'button', onclick: () => { E.setDefaultText(S.lib, diag.id, entry.typeId, entry.text, by); rerender(); toast('Earlier text restored.'); } }, 'Restore')))))),
+        h('div', {}, h('button', { class: 'btn small', type: 'button', onclick: () => { restoreEarlier(entry); rerender(); toast('Earlier text restored.'); } }, 'Restore')))))),
     h('section', { class: 'card approval', 'aria-label': 'Approval' }, diag.reviewed
       ? [h('div', { class: 'approved', role: 'status' }, '✓ Approved'), h('button', { class: 'btn quiet small', type: 'button', onclick: () => { diag.reviewed = false; rerender(); } }, 'Undo')]
       : h('button', { class: 'btn primary wide', type: 'button', onclick: () => { diag.reviewed = true; rerender(); } }, 'Approve')));
@@ -1113,7 +1179,7 @@ function renderAccountCard() {
     h('h2', {}, 'Your account'),
     h('p', {}, `Signed in as ${S.account.email}`),
     h('p', { class: 'hint', id: 'sync-status', role: 'status' }, S.syncStatus),
-    h('p', { class: 'hint' }, 'Your library follows you to any device where you sign in. Patient reports stay on each device and are never uploaded.'),
+    h('p', { class: 'hint' }, 'Your library syncs automatically to every device where you sign in. Patient reports stay on each device and are never uploaded.'),
     h('div', { class: 'row' },
       h('button', { class: 'btn', type: 'button', onclick: () => syncLibrary() }, 'Sync now'),
       h('button', {
@@ -1164,7 +1230,7 @@ function renderSetupView() {
     h('section', { class: 'card', 'aria-label': 'Kinds of text' },
       h('h2', {}, 'Kinds of text'),
       h('p', { class: 'hint' }, 'Each diagnosis stores one paragraph for each of these. A report section can auto-fill from any of them.'),
-      S.lib.types.map(typeRow),
+      S.lib.types.filter((type) => !type.own).map(typeRow),
       h('button', { class: 'btn small', type: 'button', style: 'justify-self:start', onclick: async () => { if (await createType()) render(); } }, 'Add a kind of text')),
     h('section', { class: 'card', 'aria-label': 'Share the library' },
       h('h2', {}, 'Share the library with colleagues'),
@@ -1248,8 +1314,17 @@ function startApp() {
   Store.saveReports(S.reports);
   render();
   window.addEventListener('pagehide', saveNow);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) saveNow(); else syncLibrary(); });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) { syncLibrary(); return; }
+    // Library text saves when its box loses focus, which leaving the app does not do by itself.
+    if (S.view !== 'report') document.activeElement?.blur?.();
+    saveNow();
+    if (syncTimer) syncLibrary();
+  });
+  window.addEventListener('focus', () => syncLibrary());
   window.addEventListener('online', () => syncLibrary());
+  window.addEventListener('offline', showOffline);
+  setInterval(() => { if (!document.hidden) syncLibrary(); }, SYNC_CHECK_MS);
   syncLibrary();
 }
 

@@ -264,6 +264,106 @@ test('older libraries move to the new summary format', () => {
   assert.equal(E.upgradeLibrary(custom), custom);
 });
 
+test('a diagnosis section appears only while that diagnosis is selected', () => {
+  const { lib, report, pick, section } = setup();
+  const diag = E.findExact(lib.diagnoses, 'Anaemia');
+  const type = E.addDiagnosisSection(lib, diag.id, 'Transfusion record');
+  E.setDefaultText(lib, diag.id, type.id, 'Transfused on {admitted}.');
+  report.patient.admitted = '2026-10-20';
+  pick('Hypothyroidism');
+  assert.equal(section(type.id), undefined);
+  pick('Anaemia');
+  const own = section(type.id);
+  assert.equal(own.title, 'Transfusion record');
+  assert.equal(own.blocks.length, 1, 'other diagnoses get no empty block');
+  assert.equal(own.blocks[0].text, 'Transfused on 20-Oct-2026.');
+  const titles = report.sections.map((s) => s.title);
+  assert.equal(titles.indexOf('Transfusion record'), titles.indexOf('Prescription') - 1);
+  assert.match(E.buildOutput(report), /Transfusion record\n-+\nTransfused on 20-Oct-2026\./);
+  E.removeDiagnosisFromReport(report, diag.id);
+  E.syncReport(report, lib);
+  assert.equal(section(type.id), undefined);
+});
+
+test('diagnoses using the same section name share one report section', () => {
+  const { lib, report, pick, section } = setup();
+  const a = E.findExact(lib.diagnoses, 'Anaemia');
+  const b = E.findExact(lib.diagnoses, 'Hypothyroidism');
+  const type = E.addDiagnosisSection(lib, a.id, 'Follow up plan');
+  assert.equal(E.addDiagnosisSection(lib, b.id, 'follow-up plan').id, type.id);
+  assert.equal(E.addDiagnosisSection(lib, a.id, 'Follow up plan'), null, 'no duplicates on one diagnosis');
+  assert.equal(E.addDiagnosisSection(lib, a.id, 'Description'), null, 'every diagnosis already has this');
+  E.setDefaultText(lib, a.id, type.id, 'See haematology.');
+  E.setDefaultText(lib, b.id, type.id, 'See endocrine.');
+  pick('Anaemia');
+  pick('Hypothyroidism');
+  assert.deepEqual(section(type.id).blocks.map((x) => x.text), ['See haematology.', 'See endocrine.']);
+  assert.equal(report.sections.filter((s) => s.source === type.id).length, 1);
+});
+
+test('a section removed from a report stays out, and edits can be saved back', () => {
+  const { lib, report, pick, section } = setup();
+  const diag = E.findExact(lib.diagnoses, 'Anaemia');
+  const type = E.addDiagnosisSection(lib, diag.id, 'Diet plan');
+  pick('Anaemia');
+  section(type.id).blocks[0].text = 'Eat more iron.';
+  const [change] = E.collectChanges(report, lib);
+  assert.equal(change.typeId, type.id);
+  E.applyChange(change, 'default', report, lib);
+  assert.equal(diag.content[type.id][0].text, 'Eat more iron.');
+  report.sections = report.sections.filter((s) => s.source !== type.id);
+  report.dismissed.push(type.id);
+  E.syncReport(report, lib);
+  assert.equal(section(type.id), undefined);
+});
+
+test('a diagnosis section can be renamed and deleted, and its text is kept', () => {
+  const { lib } = setup();
+  const a = E.findExact(lib.diagnoses, 'Anaemia');
+  const b = E.findExact(lib.diagnoses, 'Hypothyroidism');
+  const shared = E.addDiagnosisSection(lib, a.id, 'Plan');
+  E.addDiagnosisSection(lib, b.id, 'Plan');
+  E.setDefaultText(lib, a.id, shared.id, 'Plan for anaemia.');
+  const renamed = E.renameDiagnosisSection(lib, a.id, shared.id, 'Anaemia plan');
+  assert.notEqual(renamed.id, shared.id, 'the other diagnosis keeps its name');
+  assert.deepEqual(a.sections, [renamed.id]);
+  assert.equal(a.content[renamed.id][0].text, 'Plan for anaemia.');
+  assert.equal(a.content[shared.id], undefined);
+  assert.ok(lib.types.some((t) => t.id === shared.id));
+  E.renameDiagnosisSection(lib, a.id, renamed.id, 'Anaemia care');
+  assert.equal(lib.types.find((t) => t.id === a.sections[0]).name, 'Anaemia care');
+  E.removeDiagnosisSection(lib, a.id, a.sections[0]);
+  assert.deepEqual(a.sections, []);
+  assert.equal(a.history[0].title, 'Anaemia care');
+  assert.equal(a.history[0].text, 'Plan for anaemia.');
+  assert.ok(!lib.types.some((t) => t.name === 'Anaemia care'));
+  assert.ok(!lib.types.some((t) => t.name === 'Anaemia plan'));
+});
+
+test('sync: diagnosis sections travel, join up by name, and both devices\' additions survive', () => {
+  const { base, local, remote, diag } = syncSetup();
+  const onRemote = E.addDiagnosisSection(remote, diag(remote).id, 'Diet plan');
+  E.setDefaultText(remote, diag(remote).id, onRemote.id, 'From remote.');
+  const onLocal = E.addDiagnosisSection(local, diag(local).id, 'Diet plan');
+  E.setDefaultText(local, diag(local).id, onLocal.id, 'From local.');
+  E.addDiagnosisSection(remote, diag(remote).id, 'Only on remote');
+  const merged = E.mergeLibraries(base, local, remote);
+  const names = diag(merged).sections.map((id) => merged.types.find((t) => t.id === id).name);
+  assert.deepEqual(names, ['Diet plan', 'Only on remote']);
+  assert.deepEqual(diag(merged).content[onLocal.id].map((v) => v.text), ['From local.', 'From remote.']);
+  assert.equal(merged.types.filter((t) => t.name === 'Diet plan').length, 1);
+});
+
+test('sync: removing a diagnosis section reaches the other device', () => {
+  const { base, local, remote, diag } = syncSetup();
+  const type = E.addDiagnosisSection(local, diag(local).id, 'Diet plan');
+  const first = E.mergeLibraries(base, local, remote);
+  const synced = JSON.parse(JSON.stringify(first));
+  const other = JSON.parse(JSON.stringify(first));
+  E.removeDiagnosisSection(other, diag(other).id, type.id);
+  assert.deepEqual(diag(E.mergeLibraries(synced, first, other)).sections, []);
+});
+
 test('a new diagnosis starts unapproved', () => {
   const { lib } = setup();
   assert.equal(E.addDiagnosis(lib, 'Brucellosis').reviewed, false);

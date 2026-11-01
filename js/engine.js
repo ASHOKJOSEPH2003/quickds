@@ -138,7 +138,7 @@ export function newReport(lib) {
   return {
     id: uid(), createdAt: now, updatedAt: now, finishedAt: null,
     patient: { hospitalNo: '', mrd: '', name: '', age: '', sex: '', unit: '', ward: '', specialty: '', admitted: '', discharged: '', address: '', mobile: '', writtenBy: '', approvedBy: '' },
-    diagnoses: [], meds: [], removedMeds: [], learned: {},
+    diagnoses: [], meds: [], removedMeds: [], learned: {}, dismissed: [],
     sections: lib.layout.map((s) => newSection(s.title, s.source, lib)),
   };
 }
@@ -152,11 +152,29 @@ const withDiagnoses = (ctx, diagnoses) => {
 };
 
 
+const ownTypeIds = (lib) => new Set(lib.types.filter((t) => t.own).map((t) => t.id));
+const hasOwnSection = (lib, diagId, typeId) => !!getDiag(lib, diagId)?.sections?.includes(typeId);
+
+// A section a diagnosis has for itself joins the report while that diagnosis is selected.
+function addOwnSections(report, lib) {
+  const own = ownTypeIds(lib);
+  for (const d of report.diagnoses) {
+    for (const typeId of getDiag(lib, d.id)?.sections || []) {
+      if (!own.has(typeId) || report.sections.some((s) => s.source === typeId) || report.dismissed?.includes(typeId)) continue;
+      const prescription = report.sections.findIndex((s) => s.source === SOURCE.MEDICINES);
+      const section = { ...newSection(lib.types.find((t) => t.id === typeId).name, typeId, lib), auto: true };
+      report.sections.splice(prescription < 0 ? report.sections.length : prescription, 0, section);
+    }
+  }
+}
+
 // A summary reads as one shared opening, a note for each diagnosis that has one, and one shared closing.
 // Safe to call after any change. Text the doctor edited is never overwritten here.
 export function syncReport(report, lib) {
   const ctx = reportContext(report);
   const generated = (template) => (report.diagnoses.length ? fill(template, ctx) : '');
+  const own = ownTypeIds(lib);
+  addOwnSections(report, lib);
   for (const s of report.sections) {
     const isSummary = s.source === SOURCE.SUMMARY;
     if (s.source === SOURCE.DIAGNOSES && !s.edited) s.text = diagnosisLine(report);
@@ -171,9 +189,11 @@ export function syncReport(report, lib) {
       if (!found || found.text === found.base) return { diagId: d.id, versionId: version?.id || null, text: base, base };
       return { ...found, versionId: version?.id || null, base };
     });
+    if (own.has(s.source)) s.blocks = s.blocks.filter((b) => hasOwnSection(lib, b.diagId, s.source));
     if (isSummary && !s.edited) s.text = generated(lib.summaryOpening);
     if (isSummary && !s.closingEdited) s.closing = generated(lib.summaryClosing);
   }
+  report.sections = report.sections.filter((s) => !s.auto || s.blocks.length || s.note);
   return report;
 }
 
@@ -374,6 +394,60 @@ export function makeVersionDefault(lib, diagId, typeId, versionId) {
   if (index > 0) versions.unshift(...versions.splice(index, 1));
 }
 
+// A diagnosis can have sections of its own. Each is a kind of text marked own, so it keeps
+// versions, history, learning and sync, and diagnoses using the same title share one report section.
+export function addDiagnosisSection(lib, diagId, rawName) {
+  const diag = getDiag(lib, diagId);
+  const name = cleanName(rawName);
+  if (!diag || !name) return null;
+  let type = findExact(lib.types, name);
+  if (type && !type.own) return null;
+  if (!type) {
+    type = { id: `t-${uid()}`, name, own: true };
+    lib.types.push(type);
+  }
+  diag.sections ||= [];
+  if (diag.sections.includes(type.id)) return null;
+  diag.sections.push(type.id);
+  diag.updatedAt = Date.now();
+  return type;
+}
+
+function forgetUnusedType(lib, typeId) {
+  if (!lib.diagnoses.some((d) => d.sections?.includes(typeId))) lib.types = lib.types.filter((t) => t.id !== typeId || !t.own);
+}
+
+export function removeDiagnosisSection(lib, diagId, typeId) {
+  const diag = getDiag(lib, diagId);
+  if (!diag) return;
+  const title = lib.types.find((t) => t.id === typeId)?.name || '';
+  for (const text of textsOf(diag.content[typeId]).reverse()) remember(diag, { typeId, text, title });
+  delete diag.content[typeId];
+  diag.sections = (diag.sections || []).filter((id) => id !== typeId);
+  diag.updatedAt = Date.now();
+  forgetUnusedType(lib, typeId);
+}
+
+export function renameDiagnosisSection(lib, diagId, typeId, rawName) {
+  const diag = getDiag(lib, diagId);
+  const name = cleanName(rawName);
+  const current = lib.types.find((t) => t.id === typeId);
+  if (!diag || !name || !current) return null;
+  if (nameKey(name) === nameKey(current.name) && lib.diagnoses.every((d) => d === diag || !d.sections?.includes(typeId))) {
+    current.name = name;
+    return current;
+  }
+  const index = diag.sections.indexOf(typeId);
+  const type = addDiagnosisSection(lib, diagId, name);
+  if (!type) return null;
+  diag.sections.pop();
+  diag.sections[index] = type.id;
+  if (diag.content[typeId]) diag.content[type.id] = diag.content[typeId];
+  delete diag.content[typeId];
+  forgetUnusedType(lib, typeId);
+  return type;
+}
+
 export function setDiagnosisMedicine(lib, diagId, med) {
   const diag = getDiag(lib, diagId);
   if (!diag) return;
@@ -567,7 +641,7 @@ function choose(base, local, remote, onClash = () => local) {
 }
 
 const diagnosisView = (d) => ({
-  name: d.name, aliases: d.aliases || [], reviewed: !!d.reviewed, meds: d.meds.map(blankMed),
+  name: d.name, aliases: d.aliases || [], reviewed: !!d.reviewed, meds: d.meds.map(blankMed), sections: d.sections || [],
   content: Object.fromEntries(Object.keys(d.content || {}).sort().map((id) => [id, textsOf(d.content[id])]).filter(([, texts]) => texts.length)),
 });
 const medicineView = (m) => ({ aliases: m.aliases || [], ...blankMed(m) });
@@ -589,6 +663,11 @@ function mergeMeds(base, local, remote) {
   return choose(b, l, r, () => [...l, ...r.filter((m) => !l.some((x) => nameKey(x.name) === nameKey(m.name)))]);
 }
 
+function mergeSectionLists(base, local, remote) {
+  const [b, l, r] = [base?.sections || [], local.sections || [], remote.sections || []];
+  return choose(b, l, r, () => [...l, ...r.filter((id) => !l.includes(id))]);
+}
+
 function mergeDiagnosis(base, local, remote) {
   const field = (key, empty) => choose(base?.[key] ?? empty, local[key] ?? empty, remote[key] ?? empty);
   const seen = new Set();
@@ -598,7 +677,7 @@ function mergeDiagnosis(base, local, remote) {
   for (const [key, count] of Object.entries(local.medStats || {})) medStats[key] = Math.max(count, medStats[key] || 0);
   return {
     ...local, syncId: remote.syncId || local.syncId, name: field('name', ''), aliases: field('aliases', []), reviewed: field('reviewed', false),
-    content: mergeContent(base, local, remote), meds: mergeMeds(base, local, remote), history, medStats,
+    content: mergeContent(base, local, remote), meds: mergeMeds(base, local, remote), sections: mergeSectionLists(base, local, remote), history, medStats,
     useCount: Math.max(local.useCount || 0, remote.useCount || 0), lastUsed: Math.max(local.lastUsed || 0, remote.lastUsed || 0),
   };
 }
@@ -671,7 +750,7 @@ export function copySyncIds(lib, merged) {
 // Ignores ids and list order, which differ between devices.
 export function sameLibrary(a, b) {
   const sorted = (items, view) => items.map((item) => ({ ...view(item), useCount: item.useCount || 0 })).sort(byName);
-  const view = (lib) => [lib.types.map((t) => t.name).sort(), lib.summaryOpening, lib.summaryClosing, lib.layout.map((s) => s.title),
+  const view = (lib) => [lib.types.filter((t) => !t.own).map((t) => t.name).sort(), lib.summaryOpening, lib.summaryClosing, lib.layout.map((s) => s.title),
     sorted(lib.diagnoses, diagnosisView), sorted(lib.medicines, medicineView)];
   return same(view(a), view(b));
 }

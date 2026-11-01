@@ -16,6 +16,10 @@ It runs in any browser, installs on a phone, and works with no internet. Everyon
 8. For a report on paper or as a file, switch the Report panel to **Formatted** and press **Print or PDF**. Choose Save as PDF in the print window. It follows the same **Include patient details** setting as the text.
 9. Under **Save for next time**, choose what future reports should use, then press **Finish report**.
 
+## Sections for one diagnosis
+
+A diagnosis can have sections of its own, added at the end of its Library page. Name it, write the text, reorder, rename or delete it. It appears in a report, before the Prescription, while that diagnosis is selected. Diagnoses that use the same section name share one report section, with a block for each. In a report it can be edited or removed for that patient, and edits can be saved back like any other text.
+
 ## How the summary is built
 
 Every summary has three parts, in this order, however many diagnoses are selected:
@@ -81,7 +85,7 @@ The first screen is sign-in, and the app opens only after it. Each account has i
 The account saves the library to Firebase for use on other devices. The library is the only thing sent: diagnoses, wording, medicines, approvals and the report layout. Reports and patient details are not.
 
 - Each account has one library, at `users/{uid}/library/main`, stored as a single document.
-- A device syncs when it opens, when it comes back online, and a few seconds after a library change. With no connection it keeps working and catches up later.
+- Sync is automatic. A device syncs when it opens or regains focus, when it comes back online, 2 seconds after a library change, and every 30 seconds while it is on screen. The top bar shows the state. With no connection it keeps working and catches up later.
 - Each device remembers the library as it stood after its last sync, and compares both sides to that. A change made on one side carries over, including deletions. When both sides changed the same text, both wordings are kept as versions.
 - Google sign-in needs the Google provider turned on in Firebase Authentication, and the site's address listed under Authorized domains.
 - The web API key in `js/sync.js` only names the project and is safe to publish. These Firestore rules are what protect the data:

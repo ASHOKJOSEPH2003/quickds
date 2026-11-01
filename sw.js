@@ -1,5 +1,5 @@
 // Makes the app open with no network. Bump VERSION whenever a listed file changes.
-const VERSION = 'quickds-v11';
+const VERSION = 'quickds-v12';
 const FILES = ['./', 'index.html', 'styles.css', 'manifest.webmanifest', 'js/app.js', 'js/engine.js', 'js/seed.js', 'js/store.js', 'js/sync.js', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (event) => {
