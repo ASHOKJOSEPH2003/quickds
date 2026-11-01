@@ -3,6 +3,9 @@
 const KEYS = { library: 'dd.library.v1', reports: 'dd.reports.v1', settings: 'dd.settings.v1' };
 const memory = new Map();
 
+// A null key means all storage was cleared.
+export const isAppKey = (key) => key === null || Object.values(KEYS).includes(key);
+
 function read(key) {
   try {
     const raw = localStorage.getItem(key) ?? memory.get(key);

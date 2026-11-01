@@ -16,7 +16,7 @@ const S = {
   settings: Store.loadSettings(),
   reports: [],
   report: null,
-  showIdentifiers: false,
+  showIdentifiers: true,
   outputMode: 'text',
   libraryTab: 'diagnoses',
   libraryQuery: '',
@@ -79,6 +79,20 @@ function saveNow() {
   if (!saved) toast('This device is out of storage or blocks it. Copy your report before closing.');
 }
 
+// Another tab saved. Take its copy, so closing this tab cannot write older data over it.
+function takeOtherTabData(event) {
+  if (!Store.isAppKey(event.key)) return;
+  const wasSaved = S.reports.includes(S.report);
+  S.lib = Store.loadLibrary() || S.lib;
+  S.settings = Store.loadSettings();
+  S.reports = Store.loadReports();
+  const current = S.reports.find((r) => r.id === S.report.id);
+  if (current) S.report = current;
+  else if (wasSaved) startReport();
+  E.syncReport(S.report, S.lib);
+  render();
+}
+
 function touchReport() {
   if (!S.report) return;
   S.report.updatedAt = Date.now();
@@ -95,7 +109,7 @@ function startReport() {
   S.report = report;
   S.reports = S.reports.filter((r) => !isBlank(r));
   S.diagQuery = '';
-  S.showIdentifiers = false;
+  S.showIdentifiers = true;
 }
 
 function go(view) {
@@ -683,6 +697,7 @@ function renderOutput() {
   const scroll = host.scrollTop;
   const alerts = warnings();
   const sections = report.sections.map((s) => ({ s, body: E.toPlainText(S.showIdentifiers ? E.sectionText(s, report) : E.redact(E.sectionText(s, report), report.patient)) })).filter((x) => x.body);
+  const details = E.toPlainText(E.patientBlock(report.patient, { identifiers: S.showIdentifiers }));
   const status = byId('bar-status');
   if (status) status.textContent = alerts.length ? `${alerts.length} to check` : 'Ready';
 
@@ -694,6 +709,10 @@ function renderOutput() {
     alerts.length > 0 && h('div', { class: 'alert', role: 'status' }, alerts.map((a) => h('div', {}, a))),
     !sections.length && h('p', { class: 'hint' }, 'Your report builds here as you select diagnoses and type.'),
     sections.length > 0 && S.outputMode === 'report' && h('div', { class: 'paper-wrap' }, reportDocument()),
+    sections.length > 0 && S.outputMode === 'text' && details && h('div', { class: 'out-sec' },
+      h('div', { class: 'out-head' }, h('h3', {}, 'Patient details'),
+        h('button', { class: 'btn quiet small', type: 'button', 'aria-label': 'Copy Patient details', onclick: () => copyText(details, 'Patient details copied.') }, 'Copy')),
+      h('pre', { class: 'out' }, details)),
     sections.length > 0 && S.outputMode === 'text' && sections.map(({ s, body }) => h('div', { class: 'out-sec' },
       h('div', { class: 'out-head' }, h('h3', {}, s.title),
         h('button', { class: 'btn quiet small', type: 'button', 'aria-label': `Copy ${s.title}`, onclick: () => copyText(body, `${s.title} copied.`) }, 'Copy')),
@@ -709,7 +728,7 @@ function renderOutput() {
       h('button', { class: 'btn primary wide', type: 'button', disabled: !report.diagnoses.length, onclick: finishReport }, report.finishedAt ? 'Finished' : 'Finish report')),
     h('label', { class: 'check' },
       h('input', { id: 'show-ids', type: 'checkbox', checked: S.showIdentifiers, onchange: (e) => { S.showIdentifiers = e.target.checked; renderOutput(); } }),
-      h('span', {}, 'Include patient name and numbers. They stay out by default, because the hospital system already has them.')));
+      h('span', {}, 'Include patient details. Untick to replace them with a short reference before sending.')));
 
   const changes = E.collectChanges(report, S.lib);
   const teachCard = changes.length > 0 && h('section', { class: 'card', 'aria-label': 'Teach the app', id: 'teach' },
@@ -1073,6 +1092,7 @@ function boot() {
   if (TEST_PHASE) showNotice('Testing version. Use example patients only, no real patient details.');
   Store.requestPersistence();
   window.addEventListener('pagehide', saveNow);
+  window.addEventListener('storage', takeOtherTabData);
   document.addEventListener('visibilitychange', () => { if (document.hidden) saveNow(); });
   if ('serviceWorker' in navigator) {
     const updating = !!navigator.serviceWorker.controller;

@@ -115,21 +115,26 @@ test('missing dose details are visible in the output, never silently dropped', (
   assert.match(E.buildOutput(report), /1\. Tab Ferrous Sulphate with Folic Acid 200 mg - 1-0-1 - for 30 days - after food/);
 });
 
-test('output is plain text, and identifiers stay out unless asked for', () => {
+test('output is plain text, includes patient details by default, and can leave them out', () => {
   const { report, pick, section } = setup();
-  Object.assign(report.patient, { name: 'Test Person', hospitalNo: 'ZZ12345', mrd: 'M999', age: '40' });
+  Object.assign(report.patient, { name: 'Test Person', hospitalNo: 'ZZ12345', mrd: 'M999', age: '40', address: '1 Test Street', mobile: '9000000000' });
   pick('Anaemia');
   section('advice').note = '“Quoted” – note • item… Test Person, no. ZZ12345, was told.';
-  const out = E.buildOutput(report);
+  const full = E.buildOutput(report);
+  assert.ok(!/[^\x00-\x7F]/.test(full));
+  assert.match(full, /Name: Test Person/);
+  assert.match(full, /Hospital No: ZZ12345/);
+  assert.match(full, /Address: 1 Test Street/);
+  assert.match(full, /Mobile: 9000000000/);
+  const out = E.buildOutput(report, { identifiers: false });
   assert.ok(!/[^\x00-\x7F]/.test(out));
+  assert.ok(!out.includes('Test Street'));
+  assert.ok(!out.includes('9000000000'));
   assert.ok(!out.includes('Test Person'));
   assert.ok(!out.includes('ZZ12345'));
   assert.match(out, /the patient, no\. \[hospital no\], was told/);
   assert.ok(!out.includes('M999'));
   assert.match(out, /^Ref: TP \.\.\.2345/);
-  const full = E.buildOutput(report, { identifiers: true });
-  assert.match(full, /Name: Test Person/);
-  assert.match(full, /Hospital No: ZZ12345/);
 });
 
 test('a name that is also an ordinary word does not mangle the text', () => {
@@ -137,24 +142,24 @@ test('a name that is also an ordinary word does not mangle the text', () => {
   report.patient.name = 'Example Patient';
   pick('Anaemia');
   assert.equal(E.redact('The patient', { name: 'Patient' }), 'The patient');
-  assert.match(E.buildOutput(report), /^The patient was diagnosed/m);
-  assert.ok(!/the the patient/i.test(E.buildOutput(report)));
+  assert.match(E.buildOutput(report, { identifiers: false }), /^The patient was diagnosed/m);
+  assert.ok(!/the the patient/i.test(E.buildOutput(report, { identifiers: false })));
 });
 
-test('the formatted report matches the text output and keeps identifiers out by default', () => {
+test('the formatted report matches the text output and includes patient details by default', () => {
   const { report, pick, section } = setup();
   Object.assign(report.patient, { name: 'Test Person', hospitalNo: 'ZZ12345', writtenBy: 'Dr A' });
   pick('Anaemia');
   section('advice').note = 'Test Person, ZZ12345, was told.';
   report.meds[0].dose = '200 mg';
-  const model = E.buildReportModel(report);
+  const model = E.buildReportModel(report, { identifiers: false });
   assert.deepEqual(model.patient, [['Ref', 'TP ...2345']]);
   assert.ok(!JSON.stringify(model.sections).includes('Test Person'));
   assert.ok(!JSON.stringify(model.sections).includes('ZZ12345'));
   const prescription = model.sections.find((s) => s.title === 'Prescription');
   assert.deepEqual(prescription.medicines[0], { name: 'Tab Ferrous Sulphate with Folic Acid', dose: '200 mg', freq: '', duration: '', notes: '' });
   assert.deepEqual(model.signers[0], ['Written by', 'Dr A']);
-  const full = E.buildReportModel(report, { identifiers: true });
+  const full = E.buildReportModel(report);
   assert.ok(full.patient.some(([k, v]) => k === 'Name' && v === 'Test Person'));
   assert.ok(!E.buildReportModel(E.newReport(buildStarterLibrary())).sections.length);
 });

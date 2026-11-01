@@ -12,7 +12,7 @@ It runs in any browser, installs on a phone, and works with no internet. There i
 4. Edit anything. Text you edited is never overwritten.
 5. Fill the yellow medicine fields. An empty dose, frequency or duration appears in the report as `[dose?]`, so it cannot be missed.
 6. Copy one section at a time or the whole report, or send it by WhatsApp or email, then paste it into the hospital system. The hospital system takes plain text, so copying always gives plain text.
-7. For a report on paper or as a file, switch the Report panel to **Formatted** and press **Print or PDF**. Choose Save as PDF in the print window. The report follows the same patient details setting as the shared text.
+7. For a report on paper or as a file, switch the Report panel to **Formatted** and press **Print or PDF**. Choose Save as PDF in the print window. It follows the same **Include patient details** setting as the text.
 8. Under **Save for next time**, choose what future reports should use, then press **Finish report**.
 
 ## How it learns
@@ -39,7 +39,7 @@ Medicines have no dose, frequency or duration on purpose. Those values come from
 ## Privacy
 
 - Patient reports stay in the browser of the device that made them. There is no server to send them to.
-- The shared copy leaves out patient name and numbers by default, because the hospital system already holds them. It carries a short reference (initials and the last 4 characters of the hospital number) to match it to the right patient. Names and numbers typed into free text are removed as well.
+- Reports include the patient details by default, so anything copied or sent carries them. Untick **Include patient details** to replace them with a short reference (initials and the last 4 characters of the hospital number). Names and numbers typed into free text are then removed as well.
 - Report text is never put in a link. Links such as `wa.me/?text=` would send it through third-party servers and into browser history. On a phone the system share sheet is used. On a computer the text is copied, then the destination opens for pasting.
 - Reports delete themselves after 14 days (adjustable in Setup). **Saved > Delete all patient reports** clears them at once.
 - WhatsApp and personal email are outside the hospital's control. Get the hospital's approval before using this with real patients, and check its data rules and India's DPDP Act.
@@ -55,7 +55,9 @@ Medicines have no dose, frequency or duration on purpose. Those values come from
 
 Installing it matters on iPhone: use Safari > Share > Add to Home Screen. Safari can clear data for sites that are not installed after about 7 days without use.
 
-Data lives in one browser on one device. Clearing browser data or losing the phone loses it, so save a library file now and then.
+Closing the tab or app loses nothing: work saves as you type, and an unfinished report reopens where you left it. Tabs open at the same time keep each other up to date.
+
+Data lives in one browser on one device. Private windows, clearing browser data or losing the phone loses it, so save a library file now and then.
 
 ## Testing phase
 

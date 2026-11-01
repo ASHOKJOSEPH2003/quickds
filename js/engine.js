@@ -246,7 +246,8 @@ export function reference(patient) {
 
 const identityRows = (patient) => [['Hospital No', patient.hospitalNo], ['MRD No', patient.mrd], ['Name', patient.name],
   ['Age/Sex', [patient.age, patient.sex].filter(Boolean).join(' / ')], ['Unit', patient.unit], ['Ward', patient.ward],
-  ['Specialty', patient.specialty], ['Admitted', formatDate(patient.admitted)], ['Discharged', formatDate(patient.discharged)]]
+  ['Specialty', patient.specialty], ['Admitted', formatDate(patient.admitted)], ['Discharged', formatDate(patient.discharged)],
+  ['Address', patient.address], ['Mobile', patient.mobile]]
   .filter(([, v]) => v);
 
 const signerRows = (patient) => [['Written by', patient.writtenBy], ['Approved by', patient.approvedBy]];
@@ -255,11 +256,14 @@ export function identityLines(patient) {
   return [...identityRows(patient), ...signerRows(patient).filter(([, v]) => v)].map(([k, v]) => `${k}: ${v}`).join('\n');
 }
 
-export function buildOutput(report, { identifiers = false } = {}) {
-  const parts = [];
-  const ref = reference(report.patient);
-  if (identifiers) parts.push(identityLines(report.patient));
-  else if (ref) parts.push(`Ref: ${ref}`);
+export function patientBlock(patient, { identifiers = true } = {}) {
+  if (identifiers) return identityLines(patient);
+  const ref = reference(patient);
+  return ref ? `Ref: ${ref}` : '';
+}
+
+export function buildOutput(report, { identifiers = true } = {}) {
+  const parts = [patientBlock(report.patient, { identifiers })];
   for (const s of report.sections) {
     const body = sectionText(s, report);
     if (body) parts.push(`${heading(s.title)}\n${body}`);
@@ -269,7 +273,7 @@ export function buildOutput(report, { identifiers = false } = {}) {
 }
 
 // The same content as buildOutput, structured for the formatted report and PDF.
-export function buildReportModel(report, { identifiers = false } = {}) {
+export function buildReportModel(report, { identifiers = true } = {}) {
   const clean = (text) => (identifiers ? text : redact(text, report.patient));
   const ref = reference(report.patient);
   const sections = report.sections.map((s) => ({
