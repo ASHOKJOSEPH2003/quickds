@@ -137,7 +137,7 @@ export function newReport(lib) {
   const now = Date.now();
   return {
     id: uid(), createdAt: now, updatedAt: now, finishedAt: null,
-    patient: { hospitalNo: '', mrd: '', name: '', age: '', sex: '', unit: '', ward: '', specialty: '', admitted: '', discharged: '', address: '', mobile: '', writtenBy: '', approvedBy: '' },
+    patient: { hospitalNo: '', name: '', writtenBy: '' },
     diagnoses: [], meds: [], removedMeds: [], learned: {}, dismissed: [],
     sections: lib.layout.map((s) => newSection(s.title, s.source, lib)),
   };
@@ -669,12 +669,14 @@ export function isLibraryFile(data) {
 
 // ---------- Library format ----------
 
-export const DEFAULT_OPENING = 'The patient[, a {age}-year-old {sex},] [was admitted on {admitted} and ]was diagnosed with {diagnoses}.';
+export const DEFAULT_OPENING = 'The patient was diagnosed with {diagnoses}.';
+const DETAILED_OPENING = 'The patient[, a {age}-year-old {sex},] [was admitted on {admitted} and ]was diagnosed with {diagnoses}.';
 export const DEFAULT_CLOSING = '[The patient has been prescribed {medicines}.]';
-const OLD_DEFAULT_SUMMARY = `${DEFAULT_OPENING}[ The patient has been prescribed {medicines}.]`;
+const OLD_DEFAULT_SUMMARY = `${DETAILED_OPENING}[ The patient has been prescribed {medicines}.]`;
 
 // Libraries used to hold one summary template. Changed wording stays whole as the opening.
 export function upgradeLibrary(lib) {
+  if (lib.summaryOpening === DETAILED_OPENING) return { ...lib, summaryOpening: DEFAULT_OPENING };
   if (lib.summaryOpening !== undefined) return lib;
   const { summaryTemplate, ...rest } = lib;
   const changed = summaryTemplate && summaryTemplate !== OLD_DEFAULT_SUMMARY;

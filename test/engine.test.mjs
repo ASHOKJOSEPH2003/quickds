@@ -4,6 +4,8 @@ import * as E from '../js/engine.js';
 import { buildStarterLibrary } from '../js/seed.js';
 import { purgeOldReports } from '../js/store.js';
 
+const DETAILED_OPENING = 'The patient[, a {age}-year-old {sex},] [was admitted on {admitted} and ]was diagnosed with {diagnoses}.';
+
 const setup = () => {
   const lib = buildStarterLibrary();
   const report = E.newReport(lib);
@@ -59,11 +61,9 @@ test('most used puts real usage ahead of the starter list', () => {
 
 test('selecting a diagnosis fills every mapped section', () => {
   const { report, pick, section } = setup();
-  report.patient.age = '52';
-  report.patient.sex = 'Female';
   pick('Anaemia');
   assert.equal(section('diagnoses').text, 'ANAEMIA');
-  assert.match(section('summary').text, /a 52-year-old female, was diagnosed with anaemia\.$/);
+  assert.equal(section('summary').text, 'The patient was diagnosed with anaemia.');
   assert.equal(section('summary').closing, 'The patient has been prescribed Tab Ferrous Sulphate with Folic Acid.');
   assert.match(section('description').blocks[0].text, /low level of haemoglobin/);
   assert.match(section('advice').blocks[0].text, /rich in iron/);
@@ -307,10 +307,9 @@ const summaryOf = (report, section) => E.sectionText(section('summary'), report)
 
 test('a summary is one opening, each diagnosis note, then one closing', () => {
   const { lib, report, pick, section } = setup();
-  Object.assign(report.patient, { age: '45', sex: 'Female', admitted: '2026-10-20' });
   const anaemia = pick('Anaemia');
   const thyroid = pick('Hypothyroidism');
-  const opening = 'The patient, a 45-year-old female, was admitted on 20-Oct-2026 and was diagnosed with anaemia and hypothyroidism.';
+  const opening = 'The patient was diagnosed with anaemia and hypothyroidism.';
   const closing = 'The patient has been prescribed Tab Ferrous Sulphate with Folic Acid and Tab Thyroxine.';
   assert.equal(summaryOf(report, section), `${opening}\n\n${closing}`);
 
@@ -321,7 +320,7 @@ test('a summary is one opening, each diagnosis note, then one closing', () => {
   E.setDefaultText(lib, thyroid.id, 'summary', 'Thyroxine was started.');
   E.syncReport(report, lib);
   assert.equal(summaryOf(report, section), `${opening}\n\nTreated with blood transfusion for anaemia.\n\nThyroxine was started.\n\n${closing}`);
-  assert.match(E.buildOutput(report), /Summary\n-+\nThe patient, a 45-year-old female/);
+  assert.match(E.buildOutput(report), /Summary\n-+\nThe patient was diagnosed/);
 
   E.setDefaultText(lib, anaemia.id, 'summary', '');
   E.syncReport(report, lib);
@@ -373,9 +372,37 @@ test('a note written in a report can become the diagnosis note, with patient det
   assert.match(section('summary').blocks[0].text, /40-year-old male/);
 });
 
+test('a report asks only for the name and hospital number', () => {
+  const { report, pick } = setup();
+  assert.deepEqual(Object.keys(report.patient).sort(), ['hospitalNo', 'name', 'writtenBy']);
+  Object.assign(report.patient, { name: 'Test Person', hospitalNo: 'ZZ12345' });
+  pick('Anaemia');
+  assert.ok(E.buildOutput(report).startsWith('Hospital No: ZZ12345\nName: Test Person\n\n'));
+  assert.deepEqual(E.buildReportModel(report).patient, [['Hospital No', 'ZZ12345'], ['Name', 'Test Person']]);
+});
+
+test('reports saved before the shorter form still open and print what they hold', () => {
+  const { report, pick, section } = setup();
+  Object.assign(report.patient, { name: 'Test Person', age: '45', mrd: 'M999', address: '1 Test Street' });
+  pick('Anaemia');
+  section('advice').note = 'Note for M999.';
+  const full = E.buildOutput(report);
+  assert.match(full, /MRD No: M999/);
+  assert.match(full, /Address: 1 Test Street/);
+  assert.ok(!E.buildOutput(report, { identifiers: false }).includes('M999'));
+});
+
+test('the old opening wording moves to the shorter one, and changed wording is kept', () => {
+  const lib = buildStarterLibrary();
+  assert.equal(E.upgradeLibrary({ ...lib, summaryOpening: DETAILED_OPENING }).summaryOpening, E.DEFAULT_OPENING);
+  assert.equal(E.upgradeLibrary({ ...lib, summaryOpening: 'Mine, age {age}.' }).summaryOpening, 'Mine, age {age}.');
+  const merged = E.mergeLibraries(lib, lib, { ...lib, summaryOpening: DETAILED_OPENING });
+  assert.equal(merged.summaryOpening, E.DEFAULT_OPENING);
+});
+
 test('older libraries move to the new summary format', () => {
   const { summaryOpening, summaryClosing, ...rest } = buildStarterLibrary();
-  const old = `${summaryOpening}[ The patient has been prescribed {medicines}.]`;
+  const old = `${DETAILED_OPENING}[ The patient has been prescribed {medicines}.]`;
   const standard = E.upgradeLibrary({ ...rest, summaryTemplate: old });
   assert.equal(standard.summaryOpening, summaryOpening);
   assert.equal(standard.summaryClosing, summaryClosing);
@@ -660,7 +687,7 @@ test('sync: shared summary wording travels, and a device on the old format joins
   remote.summaryOpening = 'New opening for {diagnoses}.';
   assert.equal(E.mergeLibraries(base, local, remote).summaryOpening, 'New opening for {diagnoses}.');
   const { summaryOpening, summaryClosing, ...rest } = buildStarterLibrary();
-  const old = { ...rest, summaryTemplate: `${summaryOpening}[ The patient has been prescribed {medicines}.]` };
+  const old = { ...rest, summaryTemplate: `${DETAILED_OPENING}[ The patient has been prescribed {medicines}.]` };
   assert.ok(E.mergeLibraries(old, local, old).summaryClosing);
 });
 

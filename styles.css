@@ -227,6 +227,11 @@ pre.out { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/
 .list-row { width: 100%; display: flex; gap: 10px; align-items: center; padding: 10px 12px; background: none; border: 0; border-bottom: 1px solid var(--line); text-align: left; cursor: pointer; min-height: 46px; }
 .list-row:last-child { border-bottom: 0; }
 .list-row:hover { background: var(--surface-2); }
+.saved-row { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); }
+.saved-row:last-child { border-bottom: 0; }
+.saved-row .list-row { flex: 1; min-width: 0; border-bottom: 0; }
+.saved-pick { display: flex; align-items: center; padding: 0 4px 0 12px; cursor: pointer; flex: none; }
+.saved-pick input { width: 18px; height: 18px; margin: 0; }
 .list-row .meta { color: var(--muted); font-size: 12.5px; margin-left: auto; text-align: right; flex: none; }
 .empty { padding: 24px 12px; text-align: center; color: var(--muted); }
 .segmented { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 6px; overflow: hidden; }

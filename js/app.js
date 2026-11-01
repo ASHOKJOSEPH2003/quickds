@@ -6,7 +6,7 @@ import { buildStarterLibrary } from './seed.js';
 const { SOURCE } = E;
 const FREQUENCIES = ['OD', 'BD', 'TDS', 'QID', 'HS', 'SOS', '1-0-0', '0-0-1', '1-0-1', '1-1-1', 'Once weekly'];
 const SECTION_NAMES = ['History', 'Examination', 'Investigations', 'Hospital course', 'Procedures', 'Follow-up'];
-const PLACEHOLDERS = '{name} {age} {sex} {hospitalNo} {mrd} {unit} {ward} {admitted} {discharged} {diagnosis} {diagnoses} {medicines}';
+const PLACEHOLDERS = '{name} {hospitalNo} {diagnosis} {diagnoses} {medicines}';
 const CREATE_TYPE = '__create_type';
 // Set to false only after the hospital approves use with real patients.
 const TEST_PHASE = true;
@@ -324,36 +324,19 @@ function patientField(key, label, attrs = {}) {
 }
 
 function renderPatientCard() {
-  const p = S.report.patient;
   return h('section', { class: 'card', 'aria-label': 'Patient' },
     h('div', { class: 'card-head' }, h('h2', {}, 'Patient'),
       h('div', { class: 'row' },
         h('button', { class: 'btn quiet small', type: 'button', onclick: loadExample }, 'Load example'),
         h('button', { class: 'btn small', type: 'button', onclick: () => { startReport(); render(); } }, 'New report'))),
     h('div', { class: 'grid-patient' },
-      patientField('hospitalNo', 'Hospital No'),
-      patientField('mrd', 'MRD No'),
-      patientField('name', 'Patient name', { class: 'span-2' }),
-      patientField('age', 'Age', { inputmode: 'numeric' }),
-      h('label', { class: 'field' }, 'Sex', h('select', {
-        id: 'p-sex', value: p.sex,
-        onchange: (e) => { p.sex = e.target.value; refreshAfterEdit(); },
-      }, ['', 'Female', 'Male', 'Other'].map((v) => h('option', { value: v }, v || 'Select')))),
-      patientField('admitted', 'Admitted on', { type: 'date' }),
-      patientField('discharged', 'Discharge on', { type: 'date' }),
-      patientField('unit', 'Unit', { class: 'span-2' }),
-      patientField('ward', 'Ward'),
-      patientField('specialty', 'Specialty')),
-    h('details', {}, h('summary', {}, 'More details'), h('div', { class: 'grid-patient' },
-      patientField('address', 'Address', { class: 'span-2' }),
-      patientField('mobile', 'Mobile', { inputmode: 'tel' }),
-      patientField('approvedBy', 'Approved by'),
-      patientField('writtenBy', 'Written by', { class: 'span-2' }))));
+      patientField('name', 'Patient name'),
+      patientField('hospitalNo', 'Hospital No')));
 }
 
 function loadExample() {
   startReport();
-  Object.assign(S.report.patient, { hospitalNo: 'EX12345', mrd: 'EX-0001', name: 'Asha Example', age: '45', sex: 'Female', unit: 'Example Unit', ward: 'Ward 1', admitted: '2026-10-20', discharged: '2026-10-27' });
+  Object.assign(S.report.patient, { hospitalNo: 'EX12345', name: 'Asha Example' });
   for (const name of ['Anaemia', 'Hypothyroidism']) {
     const diag = E.findExact(S.lib.diagnoses, name);
     if (diag) E.addDiagnosisToReport(S.report, S.lib, diag.id);
@@ -906,7 +889,7 @@ function renderChange(change, brief = false) {
 
   const cautions = [
     change.warn && h('div', { class: 'alert' }, 'This may still hold a patient number or date. Remove it before saving.'),
-    change.scrubbed && h('span', { class: 'hint' }, 'The name, age, numbers and dates here are saved as placeholders.'),
+    change.scrubbed && h('span', { class: 'hint' }, 'The patient details here are saved as placeholders.'),
   ];
   if (change.kind === 'text') {
     return h('div', { class: 'change' },
@@ -966,16 +949,38 @@ async function finishReport() {
 
 function renderSavedView() {
   const reports = [...S.reports].sort((a, b) => b.updatedAt - a.updatedAt);
+  const chosen = new Set();
+  const deleteChosen = h('button', {
+    class: 'btn danger', type: 'button', disabled: true,
+    onclick: async () => {
+      const count = chosen.size;
+      const noun = count === 1 ? 'report' : 'reports';
+      if (!await confirmAction(`Delete ${count} selected ${noun} from this device? This cannot be undone.`, 'Delete')) return;
+      S.reports = S.reports.filter((r) => !chosen.has(r.id));
+      if (chosen.has(S.report.id)) startReport();
+      saveNow();
+      render();
+      toast(`Deleted ${count} ${noun}.`);
+    },
+  }, 'Delete selected');
+  const toggle = (id, on) => {
+    if (on) chosen.add(id); else chosen.delete(id);
+    deleteChosen.disabled = !chosen.size;
+    deleteChosen.textContent = chosen.size ? `Delete selected (${chosen.size})` : 'Delete selected';
+  };
   return h('main', { class: 'page narrow column' },
     h('div', { class: 'card-head' }, h('h1', { style: 'font-size:20px' }, 'Saved reports'),
       h('button', { class: 'btn primary', type: 'button', onclick: () => { startReport(); go('report'); } }, 'New report')),
     h('p', { class: 'hint' }, `Saved only on this device. Removed automatically after ${S.settings.keepDays} days.`),
+    reports.length > 0 && h('div', {}, deleteChosen),
     h('div', { class: 'list' }, reports.length ? reports.map((r) => {
       const label = r.patient.name || r.patient.hospitalNo || 'Unnamed patient';
-      return h('button', { class: 'list-row', type: 'button', onclick: () => { S.report = r; go('report'); } },
-        h('span', { class: 'grow' }, h('strong', {}, label), h('br'), h('span', { class: 'hint' }, r.diagnoses.map((d) => d.name).join(', ') || 'No diagnosis yet')),
-        h('span', { class: `tag ${r.finishedAt ? 'good' : 'flag'}` }, r.finishedAt ? 'Finished' : 'Draft'),
-        h('span', { class: 'meta' }, new Date(r.updatedAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })));
+      return h('div', { class: 'saved-row' },
+        h('label', { class: 'saved-pick' }, h('input', { type: 'checkbox', 'aria-label': `Select report for ${label}`, onchange: (e) => toggle(r.id, e.target.checked) })),
+        h('button', { class: 'list-row', type: 'button', onclick: () => { S.report = r; go('report'); } },
+          h('span', { class: 'grow' }, h('strong', {}, label), h('br'), h('span', { class: 'hint' }, r.diagnoses.map((d) => d.name).join(', ') || 'No diagnosis yet')),
+          h('span', { class: `tag ${r.finishedAt ? 'good' : 'flag'}` }, r.finishedAt ? 'Finished' : 'Draft'),
+          h('span', { class: 'meta' }, new Date(r.updatedAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }))));
     }) : h('div', { class: 'empty' }, 'No saved reports on this device.')),
     reports.length > 0 && h('div', {}, h('button', {
       class: 'btn danger', type: 'button',
@@ -1146,7 +1151,7 @@ function renderDiagnosisEditor() {
         id: 'diag-aliases', type: 'text', value: (diag.aliases || []).join(', '),
         onchange: (e) => { diag.aliases = e.target.value.split(',').map(E.cleanName).filter(Boolean); saveSoon(); },
       }))),
-    textCard({ id: SOURCE.SUMMARY, name: 'Summary note' }, 'Write only what is specific to this diagnosis, such as the treatment given. It goes between the shared opening and closing sentences, so do not repeat the age, dates or medicines. Words in curly brackets are filled in for each patient.'),
+    textCard({ id: SOURCE.SUMMARY, name: 'Summary note' }, 'Write only what is specific to this diagnosis, such as the treatment given. It goes between the shared opening and closing sentences, so do not repeat the diagnosis or medicines. Words in curly brackets are filled in for each patient.'),
     S.lib.types.filter((type) => !type.own).map((type) => textCard(type)),
     (diag.sections || []).map(ownSectionCard),
     h('button', { class: 'btn', id: 'add-diag-section', type: 'button', style: 'justify-self:start', onclick: addOwnSection }, '+ Add a section for this diagnosis'),

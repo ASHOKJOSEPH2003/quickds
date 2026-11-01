@@ -7,7 +7,7 @@ It runs in any browser, installs on a phone, and works with no internet. Everyon
 ## Using it
 
 1. Sign in. After the first time, the app stays signed in and opens straight away, even offline.
-2. Enter the patient details.
+2. Enter the patient name and hospital number.
 3. Search or tick one or more diagnoses. Most-used ones come first, then A to Z. Search understands abbreviations (T2DM), both spellings (anemia, anaemia) and small typos. A name that is not listed can be added, and duplicates are blocked.
 4. Each section fills itself. Every section has a selector that decides what fills it: Blank, Diagnosis line, Auto summary, Description, Recommendations, Prescription, or any new kind of text you create.
 5. Edit anything. Text you edited is never overwritten.
@@ -24,7 +24,7 @@ A diagnosis can have sections of its own, added at the end of its Library page. 
 
 Every summary has three parts, in this order, however many diagnoses are selected:
 
-1. **Opening:** one sentence with the age, sex, admission date and all the diagnoses.
+1. **Opening:** one sentence with all the diagnoses.
 2. **A note for each diagnosis** that has one, written in the Library. It holds only what is specific to that diagnosis, such as the treatment given.
 3. **Closing:** one sentence with all the medicines.
 
@@ -35,7 +35,7 @@ The opening and closing wording is set once under **Setup > Summary wording** an
 | What happens | What the app does |
 | --- | --- |
 | A paragraph is edited | Shows a word-by-word comparison with three choices: make default, save as a version, or just this patient |
-| Patient details appear in that text | Replaces name, age, numbers and dates with placeholders before saving, and warns about any number or date left over |
+| Patient details appear in that text | Replaces the name and hospital number with placeholders before saving, and warns about any number or date left over |
 | A diagnosis note in the summary is edited | Same choices, saved as that diagnosis's note |
 | A note is added under a section | Same choices. The note joins that diagnosis's text, and with several diagnoses you pick which |
 | A blank section is filled in | Same choices. It becomes a section for that diagnosis, under the same name |
@@ -60,9 +60,9 @@ Medicines have no dose, frequency or duration on purpose. Those values come from
 ## Privacy
 
 - Patient reports stay in the browser of the device that made them. They are never uploaded, even when signed in.
-- Reports include the patient details by default, so anything copied or sent carries them. Untick **Include patient details** to replace them with a short reference (initials and the last 4 characters of the hospital number). Names and numbers typed into free text are then removed as well.
+- A report asks for only the patient name and hospital number, and includes them by default, so anything copied or sent carries them. Untick **Include patient details** to replace them with a short reference (initials and the last 4 characters of the hospital number). Names and numbers typed into free text are then removed as well.
 - Report text is never put in a link. Links such as `wa.me/?text=` would send it through third-party servers and into browser history. On a phone the system share sheet is used. On a computer the text is copied, then the destination opens for pasting.
-- Reports delete themselves after 14 days (adjustable in Setup). **Saved > Delete all patient reports** clears them at once.
+- Reports delete themselves after 14 days (adjustable in Setup). Under **Saved**, tick reports and press **Delete selected**, or use **Delete all patient reports**.
 - WhatsApp and personal email are outside the hospital's control. Get the hospital's approval before using this with real patients, and check its data rules and India's DPDP Act.
 
 ## Offline
