@@ -180,6 +180,60 @@ test('patient details are scrubbed before text can become a default', () => {
   assert.equal(E.collectChanges(report, lib).length, 0);
 });
 
+test('a diagnosis can have its own summary, and others share the general wording', () => {
+  const { lib, report, pick, section } = setup();
+  Object.assign(report.patient, { age: '40', sex: 'Female' });
+  const anaemia = pick('Anaemia');
+  E.setDefaultText(lib, anaemia.id, 'summary', 'Treated for {diagnoses}, aged {age}.[ Ward {ward}.]');
+  E.syncReport(report, lib);
+  const summary = section('summary');
+  assert.equal(summary.text, '');
+  assert.equal(summary.blocks[0].text, 'Treated for anaemia, aged 40.');
+  E.addDiagnosisToReport(report, lib, E.findExact(lib.diagnoses, 'Hypothyroidism').id);
+  E.syncReport(report, lib);
+  assert.match(summary.text, /diagnosed with hypothyroidism\./);
+  assert.ok(!summary.text.includes('anaemia'));
+  assert.match(E.buildOutput(report), /Treated for anaemia, aged 40\./);
+  E.setDefaultText(lib, anaemia.id, 'summary', '');
+  E.syncReport(report, lib);
+  assert.equal(summary.blocks.length, 0);
+  assert.match(summary.text, /anaemia and hypothyroidism/);
+});
+
+test('an edited summary becomes that diagnosis default with patient details removed', () => {
+  const { lib, report, pick, section } = setup();
+  Object.assign(report.patient, { name: 'Test Person', age: '40', sex: 'Female' });
+  const diag = pick('Anaemia');
+  const med = report.meds[0].name;
+  const summary = section('summary');
+  summary.text = `Test Person, a 40-year-old female, got ${med} for anaemia.`;
+  summary.edited = true;
+  const [change] = E.collectChanges(report, lib);
+  assert.equal(change.after, '{name}, a {age}-year-old {sex}, got {medicines} for anaemia.');
+  E.applyChange(change, 'default', report, lib);
+  E.syncReport(report, lib);
+  assert.equal(diag.content.summary[0].text, change.after);
+  assert.equal(summary.text, '');
+  assert.equal(summary.blocks[0].text, `Test Person, a 40-year-old female, got ${med} for anaemia.`);
+  assert.equal(E.collectChanges(report, lib).length, 0);
+  report.patient.sex = 'Male';
+  E.syncReport(report, lib);
+  assert.match(summary.blocks[0].text, /40-year-old male/);
+});
+
+test('an edited summary shared by several diagnoses stays with this report', () => {
+  const { lib, report, pick, section } = setup();
+  pick('Anaemia');
+  pick('Hypothyroidism');
+  Object.assign(section('summary'), { text: 'A shared summary.', edited: true });
+  assert.ok(!E.collectChanges(report, lib).some((c) => c.typeId === 'summary'));
+});
+
+test('a new diagnosis starts unapproved', () => {
+  const { lib } = setup();
+  assert.equal(E.addDiagnosis(lib, 'Brucellosis').reviewed, false);
+});
+
 test('left-over numbers and dates raise a warning', () => {
   assert.equal(E.looksPatientSpecific('Call 9876543210'), true);
   assert.equal(E.looksPatientSpecific('Review on 12-Nov-2026'), true);

@@ -146,23 +146,36 @@ export function newReport(lib) {
 const getDiag = (lib, id) => lib.diagnoses.find((d) => d.id === id);
 const versionsOf = (diag, typeId) => diag?.content?.[typeId] || [];
 
+const withDiagnoses = (ctx, diagnoses) => {
+  const names = joinList(diagnoses.map((d) => inSentence(d.name)));
+  return { ...ctx, diagnosis: names, diagnoses: names };
+};
+
+// Diagnoses without a summary of their own share the general wording.
+const generalDiagnoses = (report, section) => report.diagnoses.filter((d) => !section.blocks.some((b) => b.diagId === d.id));
+const generalSummary = (report, lib, diagnoses) => (diagnoses.length ? fill(lib.summaryTemplate, withDiagnoses(reportContext(report), diagnoses)) : '');
+
 // Safe to call after any change. Text the doctor edited is never overwritten here.
 export function syncReport(report, lib) {
   const ctx = reportContext(report);
   for (const s of report.sections) {
+    const isSummary = s.source === SOURCE.SUMMARY;
     if (s.source === SOURCE.DIAGNOSES && !s.edited) s.text = diagnosisLine(report);
-    if (s.source === SOURCE.SUMMARY && !s.edited) s.text = report.diagnoses.length ? fill(lib.summaryTemplate, ctx) : '';
-    if (!isContentSource(lib, s.source)) { s.blocks = []; continue; }
+    if (!isSummary && !isContentSource(lib, s.source)) { s.blocks = []; continue; }
     s.blocks = report.diagnoses.map((d) => {
       const found = s.blocks.find((b) => b.diagId === d.id);
       const diag = getDiag(lib, d.id);
       if (found && !diag) return found;
       const versions = versionsOf(diag, s.source);
       const version = versions.find((v) => v.id === found?.versionId) || versions[0];
-      const base = version ? fill(version.text, { ...ctx, diagnosis: inSentence(d.name) }) : '';
+      const base = version ? fill(version.text, withDiagnoses(ctx, [d])) : '';
       if (!found || found.text === found.base) return { diagId: d.id, versionId: version?.id || null, text: base, base };
       return { ...found, versionId: version?.id || null, base };
     });
+    if (isSummary) {
+      s.blocks = s.blocks.filter((b) => b.text || b.base);
+      if (!s.edited) s.text = generalSummary(report, lib, generalDiagnoses(report, s));
+    }
   }
   return report;
 }
@@ -316,7 +329,7 @@ export function addDiagnosis(lib, rawName, by = '') {
   if (!name) return null;
   const existing = findExact(lib.diagnoses, name);
   if (existing) return existing;
-  const diag = { id: uid(), name, aliases: [], content: {}, meds: [], useCount: 0, lastUsed: 0, reviewed: true, medStats: {}, history: [], updatedAt: Date.now(), by };
+  const diag = { id: uid(), name, aliases: [], content: {}, meds: [], useCount: 0, lastUsed: 0, reviewed: false, medStats: {}, history: [], updatedAt: Date.now(), by };
   lib.diagnoses.push(diag);
   return diag;
 }
@@ -400,6 +413,12 @@ export function scrub(text, report) {
   return t;
 }
 
+// A summary also names the sex and the prescription, which change from patient to patient.
+function scrubSummary(text, report) {
+  const ctx = reportContext(report);
+  return swapWhole(swapWhole(scrub(text, report), ctx.medicines, '{medicines}'), ctx.sex, '{sex}');
+}
+
 // Numbers and dates left over after scrubbing may still belong to this one patient.
 export const looksPatientSpecific = (text) =>
   /\b\d{5,}\b/.test(text) || /\b\d{1,2}[-/ ](?:\d{1,2}|[A-Za-z]{3,9})[-/ ]\d{2,4}\b/.test(text);
@@ -412,6 +431,7 @@ export function collectChanges(report, lib) {
   };
 
   for (const s of report.sections) {
+    const clean = s.source === SOURCE.SUMMARY ? scrubSummary : scrub;
     for (const b of s.blocks) {
       const text = (b.text || '').trim();
       if (!text || text === (b.base || '').trim()) continue;
@@ -419,9 +439,17 @@ export function collectChanges(report, lib) {
       if (!diag) continue;
       const versions = versionsOf(diag, s.source);
       const version = versions.find((v) => v.id === b.versionId) || versions[0];
-      const after = scrub(text, report);
+      const after = clean(text, report);
       add({ kind: 'text', key: `text:${s.id}:${b.diagId}`, diagId: b.diagId, diagName: diag.name, typeId: s.source,
         sectionTitle: s.title, before: version?.text || '', after, warn: looksPatientSpecific(after) });
+    }
+    // An edited general summary can become that diagnosis's own, when it covers only one.
+    const general = s.source === SOURCE.SUMMARY && s.edited ? generalDiagnoses(report, s) : [];
+    const diag = general.length === 1 && getDiag(lib, general[0].id);
+    if (diag && s.text.trim()) {
+      const after = clean(s.text.trim(), report);
+      add({ kind: 'text', key: `text:${s.id}:${diag.id}`, diagId: diag.id, diagName: diag.name, typeId: s.source, sectionId: s.id,
+        sectionTitle: s.title, before: clean(generalSummary(report, lib, general), report), after, warn: looksPatientSpecific(after) });
     }
   }
 
@@ -455,6 +483,7 @@ export function collectChanges(report, lib) {
 
 export function applyChange(change, action, report, lib, { by = '', diagId } = {}) {
   if (action === 'default') setDefaultText(lib, change.diagId, change.typeId, change.after, by);
+  if (action === 'default' && change.sectionId) report.sections.find((s) => s.id === change.sectionId).edited = false;
   if (action === 'version') addVersion(lib, change.diagId, change.typeId, change.after, by);
   if (action === 'add-med') setDiagnosisMedicine(lib, diagId, change.med);
   if (action === 'save-med') setDiagnosisMedicine(lib, change.diagId, change.med);

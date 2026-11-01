@@ -21,6 +21,7 @@ It runs in any browser, installs on a phone, and works with no internet. There i
 | --- | --- |
 | A paragraph is edited | Shows a word-by-word comparison with three choices: make default, save as a version, or just this patient |
 | Patient details appear in that text | Replaces name, age, numbers and dates with placeholders before saving, and warns about any number or date left over |
+| A summary is edited | Same choices. It becomes that diagnosis's own summary. With several diagnoses, one that has no summary of its own shares the general wording |
 | A dose or duration is filled in | Offers to save it as the default for that diagnosis |
 | A medicine is added or removed | Offers to update the diagnosis defaults, and shows how many times it was added by hand before |
 | A report is finished | Updates usage counts, which reorder the Most used list |
@@ -28,11 +29,13 @@ It runs in any browser, installs on a phone, and works with no internet. There i
 
 Nothing changes silently. Every default change is a doctor's choice.
 
+Everything for a diagnosis can also be edited directly in the Library: its name, other names, summary, every kind of text, and its default medicines.
+
 To share across a team, one person keeps the reference library: **Setup > Save library file**, then colleagues use **Merge a file**. Merging adds what is new and never deletes. When the wording differs, both are kept as versions.
 
 ## Starter content needs clinical review
 
-The starter library was written as a first draft and has not been checked by a clinician. Each diagnosis shows **Not yet reviewed** until a doctor marks it reviewed.
+The starter library was written as a first draft and has not been checked by a clinician. Each diagnosis shows **Not yet approved** until a doctor presses **Approve** at the end of its Library page, which then shows a green **Approved**.
 
 Medicines have no dose, frequency or duration on purpose. Those values come from the doctor, once, and are then remembered.
 

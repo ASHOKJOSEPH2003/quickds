@@ -149,6 +149,9 @@ details[open] > summary { margin-bottom: 8px; }
 .med { border: 1px solid var(--line); border-radius: 6px; padding: 8px; display: grid; gap: 6px; background: var(--surface-2); }
 .med-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .med-name { font-weight: 620; min-width: 0; }
+input.med-name { flex: 1; }
+.approval { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.approved { background: var(--good-soft); color: var(--good); font-weight: 650; padding: 6px 12px; border-radius: 6px; }
 .med-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 1.3fr); gap: 6px; }
 @media (max-width: 620px) { .med-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .med-grid input.needs { background: var(--flag); border-color: var(--flag-line); }

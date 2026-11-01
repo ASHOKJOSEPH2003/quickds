@@ -461,7 +461,10 @@ function renderSection(section, index) {
 
 function renderSectionBody(section) {
   if (section.source === SOURCE.MEDICINES) return [renderMedicines(), noteField(section, 'Other prescription notes')];
-  if (section.source === SOURCE.DIAGNOSES || section.source === SOURCE.SUMMARY) return renderAutoText(section);
+  if (section.source === SOURCE.DIAGNOSES) return renderAutoText(section);
+  if (section.source === SOURCE.SUMMARY) {
+    return [(section.text || !section.blocks.length) && renderAutoText(section), section.blocks.map((block) => renderBlock(section, block))];
+  }
   if (section.source === SOURCE.NONE) {
     return h('textarea', {
       id: `note-${section.id}`, rows: 3, value: section.note, placeholder: `Type ${section.title.toLowerCase()} here`, 'aria-label': section.title,
@@ -508,11 +511,11 @@ function renderBlock(section, block) {
   }, 'Reset');
   return h('div', { class: 'block' },
     h('div', { class: 'block-label' }, name,
-      diag && !diag.reviewed && h('span', { class: 'tag flag' }, 'Not yet reviewed'),
+      diag && !diag.reviewed && h('span', { class: 'tag flag' }, 'Not yet approved'),
       diag && !diag.reviewed && h('button', {
         class: 'btn quiet small', type: 'button',
-        onclick: () => { diag.reviewed = true; saveSoon(); refreshAll(); toast(`${name} marked as reviewed.`); },
-      }, 'Mark reviewed'),
+        onclick: () => { diag.reviewed = true; saveSoon(); refreshAll(); toast(`${name} approved.`); },
+      }, 'Approve'),
       !versions.length && h('span', { class: 'tag' }, 'No saved text yet'),
       versions.length > 1 && h('select', {
         id: `ver-${section.id}-${block.diagId}`, value: block.versionId, 'aria-label': `Version for ${name}`,
@@ -686,7 +689,7 @@ function warnings() {
     const diag = S.lib.diagnoses.find((x) => x.id === d.id);
     return diag && !diag.reviewed && report.sections.some((s) => s.blocks.some((b) => b.diagId === d.id && b.text === b.base && b.text));
   });
-  if (unreviewed.length) list.push(`Starter text for ${E.joinList(unreviewed.map((d) => d.name))} has not been reviewed. Read it before use.`);
+  if (unreviewed.length) list.push(`Text for ${E.joinList(unreviewed.map((d) => d.name))} has not been approved. Read it before use.`);
   return list;
 }
 
@@ -781,7 +784,7 @@ function renderChange(change) {
       h('strong', {}, `${change.diagName}: ${change.sectionTitle}`),
       h('div', { class: 'diff' }, E.diffWords(change.before, change.after).map((p) => (p.kind === 'same' ? p.text : h('span', { class: p.kind }, p.text)))),
       change.warn && h('div', { class: 'alert' }, 'This may still hold a patient number or date. Remove it before saving.'),
-      h('div', { class: 'row' }, button('Make default', 'default', 'primary'), button('Save as a version', 'version'), skip));
+      h('div', { class: 'row' }, button('Make default', 'default', 'primary'), !change.sectionId && button('Save as a version', 'version'), skip));
   }
   if (change.kind === 'med-add') {
     const select = change.targets.length > 1 && h('select', { id: `target-${change.key}`, 'aria-label': 'Add to which diagnosis' }, change.targets.map((d) => h('option', { value: d.id }, d.name)));
@@ -854,11 +857,11 @@ function renderLibraryView() {
   const fillList = () => {
     const items = tab === 'diagnoses' ? S.lib.diagnoses : S.lib.medicines;
     const found = E.searchItems(items, S.libraryQuery);
-    const unreviewed = (d) => tab === 'diagnoses' && !d.reviewed;
     results.replaceChildren(...(found.length ? found.map((item) => h('button', {
       class: 'list-row', type: 'button',
       onclick: () => { S.editing = { kind: tab === 'diagnoses' ? 'diagnosis' : 'medicine', id: item.id }; render(); window.scrollTo({ top: 0, behavior: 'instant' }); },
-    }, h('span', { class: 'grow' }, item.name), unreviewed(item) && h('span', { class: 'tag flag' }, 'Not yet reviewed'),
+    }, h('span', { class: 'grow' }, item.name),
+    tab === 'diagnoses' && (item.reviewed ? h('span', { class: 'tag good' }, 'Approved') : h('span', { class: 'tag flag' }, 'Not yet approved')),
     h('span', { class: 'meta' }, item.useCount ? `Used ${item.useCount}` : ''))) : [h('div', { class: 'empty' }, 'Nothing matches. Add it with the button above.')]));
   };
   const add = () => {
@@ -916,13 +919,15 @@ function renderDiagnosisEditor() {
   const earlier = diag.history.filter((entry) => entry.typeId !== 'medicines');
   const rerender = () => { saveSoon(); const top = window.scrollY; render(); window.scrollTo({ top, behavior: 'instant' }); };
 
-  const textCard = (type) => {
+  // fallback is what shows until this diagnosis has text of its own.
+  const textCard = (type, { fallback = '', hint } = {}) => {
     const versions = diag.content[type.id] || [];
     return h('section', { class: 'card', 'aria-label': type.name },
       h('h2', {}, type.name),
+      hint && h('p', { class: 'hint' }, hint),
       h('textarea', {
-        id: `def-${type.id}`, rows: 4, value: versions[0]?.text || '', placeholder: 'Text used by default for this diagnosis', 'aria-label': `Default ${type.name}`,
-        onchange: (e) => { E.setDefaultText(S.lib, diag.id, type.id, e.target.value, by); saveSoon(); },
+        id: `def-${type.id}`, rows: 4, value: versions[0]?.text || fallback, placeholder: 'Text used by default for this diagnosis', 'aria-label': `Default ${type.name}`,
+        onchange: (e) => { E.setDefaultText(S.lib, diag.id, type.id, e.target.value === fallback ? '' : e.target.value, by); saveSoon(); },
       }),
       versions.slice(1).map((v, i) => h('div', { class: 'block' },
         h('div', { class: 'block-label' }, `Version ${i + 2}`,
@@ -939,7 +944,8 @@ function renderDiagnosisEditor() {
   };
 
   const medRow = (med) => h('div', { class: 'med' },
-    h('div', { class: 'med-top' }, h('div', { class: 'med-name' }, med.name),
+    h('div', { class: 'med-top' },
+      h('input', { class: 'med-name', type: 'text', value: med.name, 'aria-label': 'Medicine name', onchange: (e) => saveName(med, diag.meds, e.target.value, e.target) }),
       h('button', { class: 'icon', type: 'button', 'aria-label': `Remove ${med.name}`, onclick: () => { E.removeDiagnosisMedicine(S.lib, diag.id, med.name); rerender(); } }, '×')),
     h('div', { class: 'med-grid' }, [['dose', 'Dose'], ['freq', 'Frequency'], ['duration', 'Duration'], ['notes', 'Instructions']].map(([key, label]) =>
       h('input', { type: 'text', value: med[key], placeholder: label, 'aria-label': `${label} for ${med.name}`, oninput: (e) => { med[key] = e.target.value; saveSoon(); } }))));
@@ -955,9 +961,12 @@ function renderDiagnosisEditor() {
       h('label', { class: 'field' }, 'Other names and abbreviations, separated by commas', h('input', {
         id: 'diag-aliases', type: 'text', value: (diag.aliases || []).join(', '),
         onchange: (e) => { diag.aliases = e.target.value.split(',').map(E.cleanName).filter(Boolean); saveSoon(); },
-      })),
-      h('label', { class: 'check' }, h('input', { id: 'diag-reviewed', type: 'checkbox', checked: !!diag.reviewed, onchange: (e) => { diag.reviewed = e.target.checked; saveSoon(); } }), h('span', {}, 'Reviewed by a clinician'))),
-    S.lib.types.map(textCard),
+      }))),
+    textCard({ id: SOURCE.SUMMARY, name: 'Summary' }, {
+      fallback: S.lib.summaryTemplate,
+      hint: 'Write whatever this diagnosis should say. Words in curly brackets are filled in for each patient. Text in square brackets is left out when a value inside it is empty. Clear the box to go back to the general wording.',
+    }),
+    S.lib.types.map((type) => textCard(type)),
     h('section', { class: 'card', 'aria-label': 'Default prescription' },
       h('h2', {}, 'Default prescription'),
       h('p', { class: 'hint' }, 'These are added automatically when this diagnosis is selected.'),
@@ -965,9 +974,12 @@ function renderDiagnosisEditor() {
       medicinePicker((med) => { E.setDiagnosisMedicine(S.lib, diag.id, med); rerender(); }, 'diag-med-picker')),
     earlier.length > 0 && h('details', { class: 'card' }, h('summary', {}, `Earlier text (${earlier.length})`),
       h('div', { class: 'column' }, earlier.map((entry) => h('div', { class: 'change' },
-        h('span', { class: 'hint' }, `${S.lib.types.find((t) => t.id === entry.typeId)?.name || 'Text'}, ${new Date(entry.at).toLocaleDateString('en-IN')}${entry.by ? `, ${entry.by}` : ''}`),
+        h('span', { class: 'hint' }, `${entry.typeId === SOURCE.SUMMARY ? 'Summary' : S.lib.types.find((t) => t.id === entry.typeId)?.name || 'Text'}, ${new Date(entry.at).toLocaleDateString('en-IN')}${entry.by ? `, ${entry.by}` : ''}`),
         h('div', {}, entry.text),
-        h('div', {}, h('button', { class: 'btn small', type: 'button', onclick: () => { E.setDefaultText(S.lib, diag.id, entry.typeId, entry.text, by); rerender(); toast('Earlier text restored.'); } }, 'Restore')))))));
+        h('div', {}, h('button', { class: 'btn small', type: 'button', onclick: () => { E.setDefaultText(S.lib, diag.id, entry.typeId, entry.text, by); rerender(); toast('Earlier text restored.'); } }, 'Restore')))))),
+    h('section', { class: 'card approval', 'aria-label': 'Approval' }, diag.reviewed
+      ? [h('div', { class: 'approved', role: 'status' }, '✓ Approved'), h('button', { class: 'btn quiet small', type: 'button', onclick: () => { diag.reviewed = false; rerender(); } }, 'Undo')]
+      : h('button', { class: 'btn primary wide', type: 'button', onclick: () => { diag.reviewed = true; rerender(); } }, 'Approve')));
 }
 
 function renderMedicineEditor() {
@@ -1043,7 +1055,7 @@ function renderSetupView() {
     h('section', { class: 'card', 'aria-label': 'Summary paragraph' },
       h('h2', {}, 'Summary paragraph'),
       h('textarea', { id: 'set-summary', rows: 4, value: S.lib.summaryTemplate, 'aria-label': 'Summary wording', onchange: (e) => { S.lib.summaryTemplate = e.target.value; saveSoon(); } }),
-      h('p', { class: 'hint' }, 'Words in curly brackets are filled in for you: ', h('code', {}, PLACEHOLDERS), '. Text in square brackets is left out when a value inside it is empty.')),
+      h('p', { class: 'hint' }, 'Words in curly brackets are filled in for you: ', h('code', {}, PLACEHOLDERS), '. Text in square brackets is left out when a value inside it is empty. A diagnosis can have its own summary in the Library.')),
     h('section', { class: 'card', 'aria-label': 'Kinds of text' },
       h('h2', {}, 'Kinds of text'),
       h('p', { class: 'hint' }, 'Each diagnosis stores one paragraph for each of these. A report section can auto-fill from any of them.'),

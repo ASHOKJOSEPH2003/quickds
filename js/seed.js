@@ -1,4 +1,4 @@
-// Starter library. Every paragraph is marked unreviewed until a clinician checks it.
+// Starter library. Every diagnosis stays unapproved until a clinician checks it.
 // Medicines deliberately carry no dose, frequency or duration: those come from the doctor.
 
 import { uid, byName } from './engine.js';
