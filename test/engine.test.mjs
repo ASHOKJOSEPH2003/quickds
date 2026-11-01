@@ -63,7 +63,8 @@ test('selecting a diagnosis fills every mapped section', () => {
   report.patient.sex = 'Female';
   pick('Anaemia');
   assert.equal(section('diagnoses').text, 'ANAEMIA');
-  assert.match(section('summary').text, /a 52-year-old female, was diagnosed with anaemia\. The patient has been prescribed Tab Ferrous Sulphate with Folic Acid\./);
+  assert.match(section('summary').text, /a 52-year-old female, was diagnosed with anaemia\.$/);
+  assert.equal(section('summary').closing, 'The patient has been prescribed Tab Ferrous Sulphate with Folic Acid.');
   assert.match(section('description').blocks[0].text, /low level of haemoglobin/);
   assert.match(section('advice').blocks[0].text, /rich in iron/);
   assert.equal(report.meds.length, 1);
@@ -180,53 +181,87 @@ test('patient details are scrubbed before text can become a default', () => {
   assert.equal(E.collectChanges(report, lib).length, 0);
 });
 
-test('a diagnosis can have its own summary, and others share the general wording', () => {
+const summaryOf = (report, section) => E.sectionText(section('summary'), report);
+
+test('a summary is one opening, each diagnosis note, then one closing', () => {
   const { lib, report, pick, section } = setup();
-  Object.assign(report.patient, { age: '40', sex: 'Female' });
+  Object.assign(report.patient, { age: '45', sex: 'Female', admitted: '2026-10-20' });
   const anaemia = pick('Anaemia');
-  E.setDefaultText(lib, anaemia.id, 'summary', 'Treated for {diagnoses}, aged {age}.[ Ward {ward}.]');
+  const thyroid = pick('Hypothyroidism');
+  const opening = 'The patient, a 45-year-old female, was admitted on 20-Oct-2026 and was diagnosed with anaemia and hypothyroidism.';
+  const closing = 'The patient has been prescribed Tab Ferrous Sulphate with Folic Acid and Tab Thyroxine.';
+  assert.equal(summaryOf(report, section), `${opening}\n\n${closing}`);
+
+  E.setDefaultText(lib, anaemia.id, 'summary', 'Treated with blood transfusion for {diagnosis}.');
   E.syncReport(report, lib);
-  const summary = section('summary');
-  assert.equal(summary.text, '');
-  assert.equal(summary.blocks[0].text, 'Treated for anaemia, aged 40.');
-  E.addDiagnosisToReport(report, lib, E.findExact(lib.diagnoses, 'Hypothyroidism').id);
+  assert.equal(summaryOf(report, section), `${opening}\n\nTreated with blood transfusion for anaemia.\n\n${closing}`);
+
+  E.setDefaultText(lib, thyroid.id, 'summary', 'Thyroxine was started.');
   E.syncReport(report, lib);
-  assert.match(summary.text, /diagnosed with hypothyroidism\./);
-  assert.ok(!summary.text.includes('anaemia'));
-  assert.match(E.buildOutput(report), /Treated for anaemia, aged 40\./);
+  assert.equal(summaryOf(report, section), `${opening}\n\nTreated with blood transfusion for anaemia.\n\nThyroxine was started.\n\n${closing}`);
+  assert.match(E.buildOutput(report), /Summary\n-+\nThe patient, a 45-year-old female/);
+
   E.setDefaultText(lib, anaemia.id, 'summary', '');
   E.syncReport(report, lib);
-  assert.equal(summary.blocks.length, 0);
-  assert.match(summary.text, /anaemia and hypothyroidism/);
+  assert.equal(summaryOf(report, section), `${opening}\n\nThyroxine was started.\n\n${closing}`);
 });
 
-test('an edited summary becomes that diagnosis default with patient details removed', () => {
+test('a summary still reads properly with details or medicines missing', () => {
+  const { lib, report, pick, section } = setup();
+  const diag = pick('Anaemia');
+  report.meds = [];
+  E.syncReport(report, lib);
+  assert.equal(section('summary').closing, '');
+  assert.equal(summaryOf(report, section), 'The patient was diagnosed with anaemia.');
+  E.removeDiagnosisFromReport(report, diag.id);
+  E.syncReport(report, lib);
+  assert.equal(summaryOf(report, section), '');
+});
+
+test('opening and closing edits stay with the patient, and new wording reaches later reports', () => {
+  const { lib, report, pick, section } = setup();
+  pick('Anaemia');
+  const summary = section('summary');
+  Object.assign(summary, { text: 'A special opening.', edited: true, closing: 'A special closing.', closingEdited: true });
+  E.syncReport(report, lib);
+  assert.equal(summary.text, 'A special opening.');
+  assert.equal(summary.closing, 'A special closing.');
+  assert.ok(!E.collectChanges(report, lib).some((c) => c.typeId === 'summary'));
+  lib.summaryOpening = 'Seen for {diagnoses}.';
+  const next = E.syncReport(Object.assign(E.newReport(lib), { diagnoses: report.diagnoses }), lib);
+  assert.equal(next.sections.find((s) => s.source === 'summary').text, 'Seen for anaemia.');
+});
+
+test('a note written in a report can become the diagnosis note, with patient details removed', () => {
   const { lib, report, pick, section } = setup();
   Object.assign(report.patient, { name: 'Test Person', age: '40', sex: 'Female' });
   const diag = pick('Anaemia');
   const med = report.meds[0].name;
-  const summary = section('summary');
-  summary.text = `Test Person, a 40-year-old female, got ${med} for anaemia.`;
-  summary.edited = true;
+  const [block] = section('summary').blocks;
+  assert.equal(block.text, '');
+  block.text = `Test Person, a 40-year-old female, needed ${med}.`;
   const [change] = E.collectChanges(report, lib);
-  assert.equal(change.after, '{name}, a {age}-year-old {sex}, got {medicines} for anaemia.');
+  assert.equal(change.after, '{name}, a {age}-year-old {sex}, needed {medicines}.');
   E.applyChange(change, 'default', report, lib);
   E.syncReport(report, lib);
   assert.equal(diag.content.summary[0].text, change.after);
-  assert.equal(summary.text, '');
-  assert.equal(summary.blocks[0].text, `Test Person, a 40-year-old female, got ${med} for anaemia.`);
   assert.equal(E.collectChanges(report, lib).length, 0);
   report.patient.sex = 'Male';
   E.syncReport(report, lib);
-  assert.match(summary.blocks[0].text, /40-year-old male/);
+  assert.match(section('summary').blocks[0].text, /40-year-old male/);
 });
 
-test('an edited summary shared by several diagnoses stays with this report', () => {
-  const { lib, report, pick, section } = setup();
-  pick('Anaemia');
-  pick('Hypothyroidism');
-  Object.assign(section('summary'), { text: 'A shared summary.', edited: true });
-  assert.ok(!E.collectChanges(report, lib).some((c) => c.typeId === 'summary'));
+test('older libraries move to the new summary format', () => {
+  const { summaryOpening, summaryClosing, ...rest } = buildStarterLibrary();
+  const old = `${summaryOpening}[ The patient has been prescribed {medicines}.]`;
+  const standard = E.upgradeLibrary({ ...rest, summaryTemplate: old });
+  assert.equal(standard.summaryOpening, summaryOpening);
+  assert.equal(standard.summaryClosing, summaryClosing);
+  assert.equal('summaryTemplate' in standard, false);
+  const custom = E.upgradeLibrary({ ...rest, summaryTemplate: 'My wording for {diagnoses}.' });
+  assert.equal(custom.summaryOpening, 'My wording for {diagnoses}.');
+  assert.equal(custom.summaryClosing, '');
+  assert.equal(E.upgradeLibrary(custom), custom);
 });
 
 test('a new diagnosis starts unapproved', () => {
@@ -321,4 +356,104 @@ test('old reports are purged on schedule', () => {
   const now = 100 * day;
   const reports = [{ updatedAt: now - 20 * day }, { updatedAt: now - day }];
   assert.equal(purgeOldReports(reports, 14, now).length, 1);
+});
+
+// Two devices, each with its own starter ids, as after a first sync.
+const syncSetup = () => {
+  const base = buildStarterLibrary();
+  const local = buildStarterLibrary();
+  const remote = buildStarterLibrary();
+  const diag = (lib, name = 'Anaemia') => E.findExact(lib.diagnoses, name);
+  return { base, local, remote, diag };
+};
+
+test('sync: a first sync takes the other device\'s work, and untouched starter text is not duplicated', () => {
+  const { base, local, remote, diag } = syncSetup();
+  E.setDefaultText(remote, diag(remote).id, 'summary', 'My own summary.');
+  E.setDefaultText(remote, diag(remote).id, 'advice', 'New advice.');
+  diag(remote).reviewed = true;
+  E.addDiagnosis(remote, 'Brucellosis');
+  const merged = E.mergeLibraries(base, local, remote);
+  assert.equal(diag(merged).content.summary[0].text, 'My own summary.');
+  assert.deepEqual(diag(merged).content.advice.map((v) => v.text), ['New advice.']);
+  assert.equal(diag(merged).reviewed, true);
+  assert.equal(diag(merged).id, diag(local).id, 'reports keep working because local ids stay');
+  assert.ok(E.findExact(merged.diagnoses, 'Brucellosis'));
+  assert.equal(merged.diagnoses.length, local.diagnoses.length + 1);
+  assert.ok(E.sameLibrary(merged, remote));
+});
+
+test('sync: changes to different things on each device both survive', () => {
+  const { base, local, remote, diag } = syncSetup();
+  E.setDefaultText(local, diag(local).id, 'advice', 'Local advice.');
+  diag(remote).reviewed = true;
+  diag(remote).aliases = ['Low Hb'];
+  const merged = E.mergeLibraries(base, local, remote);
+  assert.equal(diag(merged).content.advice[0].text, 'Local advice.');
+  assert.equal(diag(merged).reviewed, true);
+  assert.deepEqual(diag(merged).aliases, ['Low Hb']);
+});
+
+test('sync: the same text changed on both devices keeps both wordings', () => {
+  const { base, local, remote, diag } = syncSetup();
+  E.setDefaultText(local, diag(local).id, 'advice', 'Local wording.');
+  E.setDefaultText(remote, diag(remote).id, 'advice', 'Remote wording.');
+  const merged = E.mergeLibraries(base, local, remote);
+  assert.deepEqual(diag(merged).content.advice.map((v) => v.text), ['Local wording.', 'Remote wording.']);
+});
+
+test('sync: undoing an approval and deleting a version travel to the other device', () => {
+  const { local, remote, diag } = syncSetup();
+  diag(local).reviewed = true;
+  diag(remote).reviewed = true;
+  const base = JSON.parse(JSON.stringify(remote));
+  diag(remote).reviewed = false;
+  assert.equal(diag(E.mergeLibraries(base, local, remote)).reviewed, false);
+});
+
+test('sync: a deletion spreads, unless the other device changed that item', () => {
+  const { base, local, remote, diag } = syncSetup();
+  remote.diagnoses = remote.diagnoses.filter((d) => d !== diag(remote));
+  assert.equal(diag(E.mergeLibraries(base, local, remote)), null);
+  const edited = buildStarterLibrary();
+  E.setDefaultText(edited, diag(edited).id, 'advice', 'Keep this.');
+  assert.ok(diag(E.mergeLibraries(base, edited, remote)));
+  assert.ok(diag(E.mergeLibraries(base, remote, edited)));
+});
+
+test('sync: a renamed diagnosis stays one diagnosis once both devices share a sync id', () => {
+  const { base, local, remote, diag } = syncSetup();
+  const first = E.mergeLibraries(base, local, remote);
+  const other = E.mergeLibraries(base, remote, first);
+  const synced = JSON.parse(JSON.stringify(first));
+  diag(other).name = 'Anaemia, unspecified';
+  const merged = E.mergeLibraries(synced, first, other);
+  assert.equal(merged.diagnoses.length, first.diagnoses.length);
+  assert.ok(diag(merged, 'Anaemia, unspecified'));
+  assert.equal(diag(merged, 'Anaemia, unspecified').id, diag(first).id);
+});
+
+test('sync: shared summary wording travels, and a device on the old format joins in', () => {
+  const { base, local, remote } = syncSetup();
+  remote.summaryOpening = 'New opening for {diagnoses}.';
+  assert.equal(E.mergeLibraries(base, local, remote).summaryOpening, 'New opening for {diagnoses}.');
+  const { summaryOpening, summaryClosing, ...rest } = buildStarterLibrary();
+  const old = { ...rest, summaryTemplate: `${summaryOpening}[ The patient has been prescribed {medicines}.]` };
+  assert.ok(E.mergeLibraries(old, local, old).summaryClosing);
+});
+
+test('sync: medicines merge by field, a custom text kind joins up, and nothing is lost on repeat', () => {
+  const { base, local, remote, diag } = syncSetup();
+  const med = (lib) => E.findExact(lib.medicines, diag(lib).meds[0].name);
+  med(local).dose = '200 mg';
+  med(remote).notes = 'after food';
+  local.types.push({ id: 't-local', name: 'Warning signs' });
+  remote.types.push({ id: 't-remote', name: 'Warning signs' });
+  E.setDefaultText(remote, diag(remote).id, 't-remote', 'See a doctor.');
+  const merged = E.mergeLibraries(base, local, remote);
+  assert.equal(med(merged).dose, '200 mg');
+  assert.equal(med(merged).notes, 'after food');
+  assert.equal(merged.types.filter((t) => t.name === 'Warning signs').length, 1);
+  assert.equal(diag(merged).content['t-local'][0].text, 'See a doctor.');
+  assert.ok(E.sameLibrary(E.mergeLibraries(merged, merged, merged), merged));
 });

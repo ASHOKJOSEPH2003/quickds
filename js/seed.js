@@ -1,7 +1,7 @@
 // Starter library. Every diagnosis stays unapproved until a clinician checks it.
 // Medicines deliberately carry no dose, frequency or duration: those come from the doctor.
 
-import { uid, byName } from './engine.js';
+import { uid, byName, DEFAULT_OPENING, DEFAULT_CLOSING } from './engine.js';
 
 const STARTER = [
   ['Anaemia', ['Anemia', 'Low haemoglobin'], 1, 'Anaemia is a low level of haemoglobin in the blood. It can cause tiredness, breathlessness and pallor.', 'Take food rich in iron, such as green leafy vegetables, dates, jaggery, pulses, eggs and meat. Avoid tea or coffee with meals. Get the blood count repeated as advised.', ['Tab Ferrous Sulphate with Folic Acid']],
@@ -85,7 +85,8 @@ export function buildStarterLibrary() {
   return {
     schema: 1,
     types,
-    summaryTemplate: 'The patient[, a {age}-year-old {sex},] [was admitted on {admitted} and ]was diagnosed with {diagnoses}.[ The patient has been prescribed {medicines}.]',
+    summaryOpening: DEFAULT_OPENING,
+    summaryClosing: DEFAULT_CLOSING,
     layout: [
       { title: 'Diagnosis', source: 'diagnoses' },
       { title: 'Summary', source: 'summary' },

@@ -76,6 +76,11 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 .page { max-width: 1320px; margin: 0 auto; padding-block: 16px 96px;
   padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
 .narrow { max-width: 860px; }
+.sign-in { max-width: 420px; padding-block-start: 8vh; }
+.sign-in h1 { font-size: 26px; margin: 0; }
+.field textarea { font-weight: 400; }
+.field .btn { justify-self: start; }
+.or { color: var(--muted); font-size: 13px; text-align: center; }
 .layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 480px); gap: 16px; align-items: start; }
 .column { display: grid; gap: 12px; min-width: 0; }
 .output-col { position: sticky; top: 64px; max-height: calc(100vh - 80px); overflow-y: auto; display: grid; gap: 12px; }
@@ -93,7 +98,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 
 /* Controls */
 label.field { display: grid; gap: 3px; font-size: 12.5px; color: var(--muted); font-weight: 550; min-width: 0; }
-input[type="text"], input[type="search"], input[type="date"], input[type="email"], input[type="number"], input:not([type]), select, textarea {
+input[type="text"], input[type="search"], input[type="date"], input[type="email"], input[type="password"], input[type="number"], input:not([type]), select, textarea {
   width: 100%; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 6px; padding: 8px 9px; color: var(--fg); min-height: 38px; }
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: .8; }
 textarea { resize: vertical; line-height: 1.45; field-sizing: content; min-height: 62px; }

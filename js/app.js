@@ -1,5 +1,6 @@
 import * as E from './engine.js';
 import * as Store from './store.js';
+import * as Sync from './sync.js';
 import { buildStarterLibrary } from './seed.js';
 
 const { SOURCE } = E;
@@ -10,9 +11,12 @@ const CREATE_TYPE = '__create_type';
 // Set to false only after the hospital approves use with real patients.
 const TEST_PHASE = true;
 
+const signedIn = Store.loadAccount();
+if (signedIn) Store.useAccount(signedIn.uid);
+
 const S = {
   view: 'report',
-  lib: Store.loadLibrary() || buildStarterLibrary(),
+  lib: E.upgradeLibrary(Store.loadLibrary() || buildStarterLibrary()),
   settings: Store.loadSettings(),
   reports: [],
   report: null,
@@ -22,6 +26,8 @@ const S = {
   libraryQuery: '',
   editing: null,
   diagQuery: '',
+  account: signedIn,
+  syncStatus: '',
 };
 
 // ---------- Small helpers ----------
@@ -74,16 +80,97 @@ function saveSoon() {
 
 function saveNow() {
   clearTimeout(saveTimer);
+  if (!S.account) return;
   Store.saveLibrary(S.lib);
   const saved = Store.saveReports(S.reports);
   if (!saved) toast('This device is out of storage or blocks it. Copy your report before closing.');
+  syncSoon();
+}
+
+// ---------- Library sync ----------
+
+let syncTimer;
+let syncing = false;
+let syncedRaw = '';
+
+function syncSoon() {
+  if (!S.account || JSON.stringify(S.lib) === syncedRaw) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(syncLibrary, 5000);
+}
+
+function showSyncStatus(text) {
+  S.syncStatus = text;
+  const status = byId('sync-status');
+  if (status) status.textContent = text;
+}
+
+function useLibrary(lib) {
+  S.lib = lib;
+  E.syncReport(S.report, S.lib);
+  Store.saveLibrary(S.lib);
+  render();
+}
+
+function syncFailed(error) {
+  if (error.code === 'SIGNED_OUT') {
+    signOut();
+  } else if (error.code === 'OFFLINE') {
+    showSyncStatus('Offline. Your library will sync when you reconnect.');
+  } else {
+    showSyncStatus(`${error.message} Your library is safe on this device.`);
+  }
+}
+
+// Brings this device and the online copy together. Changes made on only one side carry over,
+// and when both sides changed the same text, both wordings are kept.
+async function syncLibrary(retry = true) {
+  if (!S.account || syncing || !navigator.onLine) return;
+  syncing = true;
+  clearTimeout(syncTimer);
+  let tryAgain = false;
+  try {
+    S.account = await Sync.freshAccount(S.account);
+    Store.saveAccount(S.account);
+    const remote = await Sync.readLibrary(S.account);
+    const merged = remote ? E.mergeLibraries(Store.loadSynced() || buildStarterLibrary(), S.lib, remote.library) : E.mergeLibraries(S.lib, S.lib, S.lib);
+    if (E.sameLibrary(merged, S.lib)) {
+      E.copySyncIds(S.lib, merged);
+      Store.saveLibrary(S.lib);
+    } else if (isBusy()) {
+      syncTimer = setTimeout(syncLibrary, 5000);
+      return;
+    } else {
+      useLibrary(merged);
+    }
+    if (!remote || !E.sameLibrary(merged, remote.library)) await Sync.writeLibrary(S.account, merged, remote?.updateTime);
+    Store.saveSynced(merged);
+    syncedRaw = JSON.stringify(S.lib);
+    showSyncStatus('Library synced just now.');
+  } catch (error) {
+    if (error.code === 'CONFLICT' && retry) tryAgain = true;
+    else syncFailed(error);
+  } finally {
+    syncing = false;
+  }
+  if (tryAgain) await syncLibrary(false);
+}
+
+function signOut() {
+  saveNow();
+  Store.saveAccount(null);
+  location.reload();
 }
 
 // Another tab saved. Take its copy, so closing this tab cannot write older data over it.
 function takeOtherTabData(event) {
   if (!Store.isAppKey(event.key)) return;
+  const account = Store.loadAccount();
+  if (account?.uid !== S.account?.uid) { location.reload(); return; }
+  S.account = account;
+  if (!S.account) return;
   const wasSaved = S.reports.includes(S.report);
-  S.lib = Store.loadLibrary() || S.lib;
+  S.lib = E.upgradeLibrary(Store.loadLibrary() || S.lib);
   S.settings = Store.loadSettings();
   S.reports = Store.loadReports();
   const current = S.reports.find((r) => r.id === S.report.id);
@@ -463,7 +550,11 @@ function renderSectionBody(section) {
   if (section.source === SOURCE.MEDICINES) return [renderMedicines(), noteField(section, 'Other prescription notes')];
   if (section.source === SOURCE.DIAGNOSES) return renderAutoText(section);
   if (section.source === SOURCE.SUMMARY) {
-    return [(section.text || !section.blocks.length) && renderAutoText(section), section.blocks.map((block) => renderBlock(section, block))];
+    return [
+      renderAutoText(section, { label: 'Opening' }),
+      section.blocks.map((block) => renderBlock(section, block)),
+      renderAutoText(section, { label: 'Closing', textKey: 'closing', editedKey: 'closingEdited' }),
+    ];
   }
   if (section.source === SOURCE.NONE) {
     return h('textarea', {
@@ -485,19 +576,17 @@ function noteField(section, label) {
   });
 }
 
-function renderAutoText(section) {
+function renderAutoText(section, { label = section.title, textKey = 'text', editedKey = 'edited' } = {}) {
   const reset = h('button', {
-    class: 'btn quiet small', type: 'button', hidden: !section.edited,
-    onclick: () => { section.edited = false; E.syncReport(S.report, S.lib); touchReport(); refreshAll(); },
+    class: 'btn quiet small', type: 'button', hidden: !section[editedKey],
+    onclick: () => { section[editedKey] = false; E.syncReport(S.report, S.lib); touchReport(); refreshAll(); },
   }, 'Use automatic text');
-  const empty = section.source === SOURCE.DIAGNOSES ? 'Selected diagnoses appear here.' : 'Select a diagnosis and the summary is written here.';
-  return [
-    h('textarea', {
-      id: `text-${section.id}`, rows: 2, value: section.text, placeholder: empty, 'aria-label': section.title,
-      oninput: (e) => { section.text = e.target.value; section.edited = true; reset.hidden = false; refreshAfterEdit(); },
-    }),
-    reset,
-  ];
+  const empty = section.source === SOURCE.DIAGNOSES ? 'Selected diagnoses appear here.' : 'Select a diagnosis and this is written for you.';
+  const area = h('textarea', {
+    id: `${textKey}-${section.id}`, rows: 2, value: section[textKey] || '', placeholder: empty, 'aria-label': label,
+    oninput: (e) => { section[textKey] = e.target.value; section[editedKey] = true; reset.hidden = false; refreshAfterEdit(); },
+  });
+  return section.source === SOURCE.SUMMARY ? h('label', { class: 'field' }, label, area, reset) : [area, reset];
 }
 
 function renderBlock(section, block) {
@@ -516,7 +605,7 @@ function renderBlock(section, block) {
         class: 'btn quiet small', type: 'button',
         onclick: () => { diag.reviewed = true; saveSoon(); refreshAll(); toast(`${name} approved.`); },
       }, 'Approve'),
-      !versions.length && h('span', { class: 'tag' }, 'No saved text yet'),
+      !versions.length && section.source !== SOURCE.SUMMARY && h('span', { class: 'tag' }, 'No saved text yet'),
       versions.length > 1 && h('select', {
         id: `ver-${section.id}-${block.diagId}`, value: block.versionId, 'aria-label': `Version for ${name}`,
         onchange: (e) => {
@@ -529,6 +618,7 @@ function renderBlock(section, block) {
       edited, reset),
     h('textarea', {
       id: `block-${section.id}-${block.diagId}`, rows: 3, value: block.text, 'aria-label': `${section.title} for ${name}`,
+      placeholder: section.source === SOURCE.SUMMARY ? 'Add a note for this diagnosis, or leave blank' : null,
       oninput: (e) => {
         block.text = e.target.value;
         const same = block.text === block.base;
@@ -663,8 +753,10 @@ function refreshAfterEdit() {
   touchReport();
   // Patient edits can change untouched generated text, which is live in the form.
   for (const section of S.report.sections) {
-    const auto = byId(`text-${section.id}`);
-    if (auto && auto !== document.activeElement) auto.value = section.text;
+    for (const key of ['text', 'closing']) {
+      const auto = byId(`${key}-${section.id}`);
+      if (auto && auto !== document.activeElement) auto.value = section[key] || '';
+    }
     for (const block of section.blocks) {
       const area = byId(`block-${section.id}-${block.diagId}`);
       if (area && area !== document.activeElement) area.value = block.text;
@@ -784,7 +876,7 @@ function renderChange(change) {
       h('strong', {}, `${change.diagName}: ${change.sectionTitle}`),
       h('div', { class: 'diff' }, E.diffWords(change.before, change.after).map((p) => (p.kind === 'same' ? p.text : h('span', { class: p.kind }, p.text)))),
       change.warn && h('div', { class: 'alert' }, 'This may still hold a patient number or date. Remove it before saving.'),
-      h('div', { class: 'row' }, button('Make default', 'default', 'primary'), !change.sectionId && button('Save as a version', 'version'), skip));
+      h('div', { class: 'row' }, button('Make default', 'default', 'primary'), button('Save as a version', 'version'), skip));
   }
   if (change.kind === 'med-add') {
     const select = change.targets.length > 1 && h('select', { id: `target-${change.key}`, 'aria-label': 'Add to which diagnosis' }, change.targets.map((d) => h('option', { value: d.id }, d.name)));
@@ -919,15 +1011,14 @@ function renderDiagnosisEditor() {
   const earlier = diag.history.filter((entry) => entry.typeId !== 'medicines');
   const rerender = () => { saveSoon(); const top = window.scrollY; render(); window.scrollTo({ top, behavior: 'instant' }); };
 
-  // fallback is what shows until this diagnosis has text of its own.
-  const textCard = (type, { fallback = '', hint } = {}) => {
+  const textCard = (type, hint) => {
     const versions = diag.content[type.id] || [];
     return h('section', { class: 'card', 'aria-label': type.name },
       h('h2', {}, type.name),
       hint && h('p', { class: 'hint' }, hint),
       h('textarea', {
-        id: `def-${type.id}`, rows: 4, value: versions[0]?.text || fallback, placeholder: 'Text used by default for this diagnosis', 'aria-label': `Default ${type.name}`,
-        onchange: (e) => { E.setDefaultText(S.lib, diag.id, type.id, e.target.value === fallback ? '' : e.target.value, by); saveSoon(); },
+        id: `def-${type.id}`, rows: 4, value: versions[0]?.text || '', placeholder: 'Text used by default for this diagnosis', 'aria-label': `Default ${type.name}`,
+        onchange: (e) => { E.setDefaultText(S.lib, diag.id, type.id, e.target.value, by); saveSoon(); },
       }),
       versions.slice(1).map((v, i) => h('div', { class: 'block' },
         h('div', { class: 'block-label' }, `Version ${i + 2}`,
@@ -962,10 +1053,7 @@ function renderDiagnosisEditor() {
         id: 'diag-aliases', type: 'text', value: (diag.aliases || []).join(', '),
         onchange: (e) => { diag.aliases = e.target.value.split(',').map(E.cleanName).filter(Boolean); saveSoon(); },
       }))),
-    textCard({ id: SOURCE.SUMMARY, name: 'Summary' }, {
-      fallback: S.lib.summaryTemplate,
-      hint: 'Write whatever this diagnosis should say. Words in curly brackets are filled in for each patient. Text in square brackets is left out when a value inside it is empty. Clear the box to go back to the general wording.',
-    }),
+    textCard({ id: SOURCE.SUMMARY, name: 'Summary note' }, 'Write only what is specific to this diagnosis, such as the treatment given. It goes between the shared opening and closing sentences, so do not repeat the age, dates or medicines. Words in curly brackets are filled in for each patient.'),
     S.lib.types.map((type) => textCard(type)),
     h('section', { class: 'card', 'aria-label': 'Default prescription' },
       h('h2', {}, 'Default prescription'),
@@ -974,7 +1062,7 @@ function renderDiagnosisEditor() {
       medicinePicker((med) => { E.setDiagnosisMedicine(S.lib, diag.id, med); rerender(); }, 'diag-med-picker')),
     earlier.length > 0 && h('details', { class: 'card' }, h('summary', {}, `Earlier text (${earlier.length})`),
       h('div', { class: 'column' }, earlier.map((entry) => h('div', { class: 'change' },
-        h('span', { class: 'hint' }, `${entry.typeId === SOURCE.SUMMARY ? 'Summary' : S.lib.types.find((t) => t.id === entry.typeId)?.name || 'Text'}, ${new Date(entry.at).toLocaleDateString('en-IN')}${entry.by ? `, ${entry.by}` : ''}`),
+        h('span', { class: 'hint' }, `${entry.typeId === SOURCE.SUMMARY ? 'Summary note' : S.lib.types.find((t) => t.id === entry.typeId)?.name || 'Text'}, ${new Date(entry.at).toLocaleDateString('en-IN')}${entry.by ? `, ${entry.by}` : ''}`),
         h('div', {}, entry.text),
         h('div', {}, h('button', { class: 'btn small', type: 'button', onclick: () => { E.setDefaultText(S.lib, diag.id, entry.typeId, entry.text, by); rerender(); toast('Earlier text restored.'); } }, 'Restore')))))),
     h('section', { class: 'card approval', 'aria-label': 'Approval' }, diag.reviewed
@@ -1020,6 +1108,20 @@ function mergeFrom(raw) {
   toast(`Added ${c.diagnoses} diagnoses, ${c.medicines} medicines and ${c.versions} text versions.`);
 }
 
+function renderAccountCard() {
+  return h('section', { class: 'card', 'aria-label': 'Account' },
+    h('h2', {}, 'Your account'),
+    h('p', {}, `Signed in as ${S.account.email}`),
+    h('p', { class: 'hint', id: 'sync-status', role: 'status' }, S.syncStatus),
+    h('p', { class: 'hint' }, 'Your library follows you to any device where you sign in. Patient reports stay on each device and are never uploaded.'),
+    h('div', { class: 'row' },
+      h('button', { class: 'btn', type: 'button', onclick: () => syncLibrary() }, 'Sync now'),
+      h('button', {
+        class: 'btn', type: 'button',
+        onclick: async () => { if (await confirmAction('Sign out on this device? Your work stays here for your next sign-in, and your online library is kept.', 'Sign out')) signOut(); },
+      }, 'Sign out')));
+}
+
 function renderSetupView() {
   const setting = (key, value) => { S.settings[key] = value; Store.saveSettings(S.settings); };
   const file = h('input', {
@@ -1046,16 +1148,19 @@ function renderSetupView() {
 
   return h('main', { class: 'page narrow column' },
     h('h1', { style: 'font-size:20px' }, 'Setup'),
+    renderAccountCard(),
     h('section', { class: 'card', 'aria-label': 'You' },
       h('h2', {}, 'You'),
       h('div', { class: 'grid-patient' },
         h('label', { class: 'field span-2' }, 'Your name, recorded when you change a default', h('input', { id: 'set-author', type: 'text', value: S.settings.author, oninput: (e) => setting('author', e.target.value) })),
         h('label', { class: 'field span-2' }, 'Email address that reports go to', h('input', { id: 'set-email', type: 'email', value: S.settings.email, oninput: (e) => setting('email', e.target.value) })),
         h('label', { class: 'field span-2' }, 'Heading on formatted reports, such as your unit', h('input', { id: 'set-heading', type: 'text', value: S.settings.reportHeading, oninput: (e) => setting('reportHeading', e.target.value) })))),
-    h('section', { class: 'card', 'aria-label': 'Summary paragraph' },
-      h('h2', {}, 'Summary paragraph'),
-      h('textarea', { id: 'set-summary', rows: 4, value: S.lib.summaryTemplate, 'aria-label': 'Summary wording', onchange: (e) => { S.lib.summaryTemplate = e.target.value; saveSoon(); } }),
-      h('p', { class: 'hint' }, 'Words in curly brackets are filled in for you: ', h('code', {}, PLACEHOLDERS), '. Text in square brackets is left out when a value inside it is empty. A diagnosis can have its own summary in the Library.')),
+    h('section', { class: 'card', 'aria-label': 'Summary wording' },
+      h('h2', {}, 'Summary wording'),
+      h('p', { class: 'hint' }, 'Every summary starts with the opening, then the note for each diagnosis from the Library, then the closing.'),
+      h('label', { class: 'field' }, 'Opening', h('textarea', { id: 'set-opening', rows: 3, value: S.lib.summaryOpening, onchange: (e) => { S.lib.summaryOpening = e.target.value; saveSoon(); } })),
+      h('label', { class: 'field' }, 'Closing', h('textarea', { id: 'set-closing', rows: 2, value: S.lib.summaryClosing, onchange: (e) => { S.lib.summaryClosing = e.target.value; saveSoon(); } })),
+      h('p', { class: 'hint' }, 'Words in curly brackets are filled in for you: ', h('code', {}, PLACEHOLDERS), '. Text in square brackets is left out when a value inside it is empty.')),
     h('section', { class: 'card', 'aria-label': 'Kinds of text' },
       h('h2', {}, 'Kinds of text'),
       h('p', { class: 'hint' }, 'Each diagnosis stores one paragraph for each of these. A report section can auto-fill from any of them.'),
@@ -1081,7 +1186,7 @@ function renderSetupView() {
       h('div', {}, h('button', {
         class: 'btn danger', type: 'button',
         onclick: async () => {
-          if (!await confirmAction('Replace the whole library with the starter list? Your own wording and medicines will be lost. Save a library file first.', 'Replace')) return;
+          if (!await confirmAction('Replace the whole library with the starter list? Your own wording and medicines will be lost, including your online copy and your other devices. Save a library file first.', 'Replace')) return;
           S.lib = buildStarterLibrary();
           startReport();
           saveNow();
@@ -1090,9 +1195,50 @@ function renderSetupView() {
       }, 'Restore the starter library'))));
 }
 
+// ---------- Sign in ----------
+
+function renderSignIn() {
+  const email = h('input', { id: 'account-email', type: 'email', autocomplete: 'username', required: true });
+  const password = h('input', { id: 'account-password', type: 'password', autocomplete: 'current-password' });
+  const enter = async (action) => {
+    try {
+      const account = await action();
+      if (!account) return;
+      Store.saveAccount(account);
+      location.reload();
+    } catch (error) {
+      toast(error.message);
+    }
+  };
+  const withPassword = (action) => enter(() => action(E.cleanName(email.value), password.value));
+  const forgot = async () => {
+    if (!E.cleanName(email.value)) { email.focus(); toast('Type your email first.'); return; }
+    try {
+      await Sync.sendPasswordReset(E.cleanName(email.value));
+      toast('If that email has an account, a reset link is on its way.');
+    } catch (error) {
+      toast(error.message);
+    }
+  };
+  byId('app').replaceChildren(h('main', { class: 'page sign-in column' },
+    h('h1', {}, 'QuickDS'),
+    h('p', { class: 'hint' }, 'Sign in to write discharge summaries. Your library follows you to every device. Patient reports stay on the device and are never uploaded.'),
+    h('section', { class: 'card', 'aria-label': 'Sign in' },
+      h('button', { class: 'btn', id: 'google-sign-in', type: 'button', onclick: () => enter(Sync.signInWithGoogle) }, 'Continue with Google'),
+      h('div', { class: 'or' }, 'or'),
+      h('form', { class: 'column', onsubmit: (e) => { e.preventDefault(); withPassword(Sync.signIn); } },
+        h('label', { class: 'field' }, 'Email', email),
+        h('label', { class: 'field' }, 'Password', password),
+        h('button', { class: 'btn primary', type: 'submit' }, 'Sign in'),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn', type: 'button', onclick: () => withPassword(Sync.signUp) }, 'Create account'),
+          h('button', { class: 'btn quiet', type: 'button', onclick: forgot }, 'Forgot password')))),
+    !navigator.onLine && h('p', { class: 'hint' }, 'You are offline. Signing in needs a connection the first time.')));
+}
+
 // ---------- Start ----------
 
-function boot() {
+function startApp() {
   S.reports = Store.purgeOldReports(Store.loadReports(), S.settings.keepDays);
   const draft = [...S.reports].sort((a, b) => b.updatedAt - a.updatedAt).find((r) => !r.finishedAt);
   if (draft) S.report = draft;
@@ -1101,11 +1247,18 @@ function boot() {
   Store.saveLibrary(S.lib);
   Store.saveReports(S.reports);
   render();
+  window.addEventListener('pagehide', saveNow);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) saveNow(); else syncLibrary(); });
+  window.addEventListener('online', () => syncLibrary());
+  syncLibrary();
+}
+
+function boot() {
+  if (S.account) startApp();
+  else renderSignIn();
   if (TEST_PHASE) showNotice('Testing version. Use example patients only, no real patient details.');
   Store.requestPersistence();
-  window.addEventListener('pagehide', saveNow);
   window.addEventListener('storage', takeOtherTabData);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) saveNow(); });
   if ('serviceWorker' in navigator) {
     const updating = !!navigator.serviceWorker.controller;
     navigator.serviceWorker.register('sw.js').then((registration) => {
@@ -1121,10 +1274,11 @@ function boot() {
   }
 }
 
+const isBusy = () => document.activeElement?.matches('input, textarea, select') || byId('dialog').open;
+
 // Moves to a new version, but not during typing, a dialog, or a report with details left out.
 function reloadWhenIdle() {
-  const busy = document.activeElement?.matches('input, textarea, select') || byId('dialog').open || !S.showIdentifiers;
-  if (busy) { setTimeout(reloadWhenIdle, 2000); return; }
+  if (isBusy() || !S.showIdentifiers) { setTimeout(reloadWhenIdle, 2000); return; }
   saveNow();
   location.reload();
 }

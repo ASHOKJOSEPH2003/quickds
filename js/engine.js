@@ -151,13 +151,12 @@ const withDiagnoses = (ctx, diagnoses) => {
   return { ...ctx, diagnosis: names, diagnoses: names };
 };
 
-// Diagnoses without a summary of their own share the general wording.
-const generalDiagnoses = (report, section) => report.diagnoses.filter((d) => !section.blocks.some((b) => b.diagId === d.id));
-const generalSummary = (report, lib, diagnoses) => (diagnoses.length ? fill(lib.summaryTemplate, withDiagnoses(reportContext(report), diagnoses)) : '');
 
+// A summary reads as one shared opening, a note for each diagnosis that has one, and one shared closing.
 // Safe to call after any change. Text the doctor edited is never overwritten here.
 export function syncReport(report, lib) {
   const ctx = reportContext(report);
+  const generated = (template) => (report.diagnoses.length ? fill(template, ctx) : '');
   for (const s of report.sections) {
     const isSummary = s.source === SOURCE.SUMMARY;
     if (s.source === SOURCE.DIAGNOSES && !s.edited) s.text = diagnosisLine(report);
@@ -172,10 +171,8 @@ export function syncReport(report, lib) {
       if (!found || found.text === found.base) return { diagId: d.id, versionId: version?.id || null, text: base, base };
       return { ...found, versionId: version?.id || null, base };
     });
-    if (isSummary) {
-      s.blocks = s.blocks.filter((b) => b.text || b.base);
-      if (!s.edited) s.text = generalSummary(report, lib, generalDiagnoses(report, s));
-    }
+    if (isSummary && !s.edited) s.text = generated(lib.summaryOpening);
+    if (isSummary && !s.closingEdited) s.closing = generated(lib.summaryClosing);
   }
   return report;
 }
@@ -232,7 +229,7 @@ export function formatMed(med, index) {
   return `${index + 1}. ${parts.join(' - ')}`;
 }
 
-const sectionParagraphs = (section) => [section.text, ...section.blocks.map((b) => b.text), section.note]
+const sectionParagraphs = (section) => [section.text, ...section.blocks.map((b) => b.text), section.closing, section.note]
   .map((p) => (p || '').trim()).filter(Boolean);
 
 export function sectionText(section, report) {
@@ -443,14 +440,6 @@ export function collectChanges(report, lib) {
       add({ kind: 'text', key: `text:${s.id}:${b.diagId}`, diagId: b.diagId, diagName: diag.name, typeId: s.source,
         sectionTitle: s.title, before: version?.text || '', after, warn: looksPatientSpecific(after) });
     }
-    // An edited general summary can become that diagnosis's own, when it covers only one.
-    const general = s.source === SOURCE.SUMMARY && s.edited ? generalDiagnoses(report, s) : [];
-    const diag = general.length === 1 && getDiag(lib, general[0].id);
-    if (diag && s.text.trim()) {
-      const after = clean(s.text.trim(), report);
-      add({ kind: 'text', key: `text:${s.id}:${diag.id}`, diagId: diag.id, diagName: diag.name, typeId: s.source, sectionId: s.id,
-        sectionTitle: s.title, before: clean(generalSummary(report, lib, general), report), after, warn: looksPatientSpecific(after) });
-    }
   }
 
   const targets = report.diagnoses.filter((d) => getDiag(lib, d.id));
@@ -483,7 +472,6 @@ export function collectChanges(report, lib) {
 
 export function applyChange(change, action, report, lib, { by = '', diagId } = {}) {
   if (action === 'default') setDefaultText(lib, change.diagId, change.typeId, change.after, by);
-  if (action === 'default' && change.sectionId) report.sections.find((s) => s.id === change.sectionId).edited = false;
   if (action === 'version') addVersion(lib, change.diagId, change.typeId, change.after, by);
   if (action === 'add-med') setDiagnosisMedicine(lib, diagId, change.med);
   if (action === 'save-med') setDiagnosisMedicine(lib, change.diagId, change.med);
@@ -551,6 +539,141 @@ export function mergeLibrary(lib, incoming) {
 
 export function isLibraryFile(data) {
   return !!data && Array.isArray(data.diagnoses) && Array.isArray(data.medicines) && Array.isArray(data.types);
+}
+
+// ---------- Library format ----------
+
+export const DEFAULT_OPENING = 'The patient[, a {age}-year-old {sex},] [was admitted on {admitted} and ]was diagnosed with {diagnoses}.';
+export const DEFAULT_CLOSING = '[The patient has been prescribed {medicines}.]';
+const OLD_DEFAULT_SUMMARY = `${DEFAULT_OPENING}[ The patient has been prescribed {medicines}.]`;
+
+// Libraries used to hold one summary template. Changed wording stays whole as the opening.
+export function upgradeLibrary(lib) {
+  if (lib.summaryOpening !== undefined) return lib;
+  const { summaryTemplate, ...rest } = lib;
+  const changed = summaryTemplate && summaryTemplate !== OLD_DEFAULT_SUMMARY;
+  return { ...rest, summaryOpening: changed ? summaryTemplate : DEFAULT_OPENING, summaryClosing: changed ? '' : DEFAULT_CLOSING };
+}
+
+// ---------- Sync between devices ----------
+
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const textsOf = (versions) => (versions || []).map((v) => v.text).filter(Boolean);
+
+// Three-way choice: whichever side changed since the last sync wins, and a clash goes to onClash.
+function choose(base, local, remote, onClash = () => local) {
+  if (same(local, remote) || same(remote, base)) return local;
+  return same(local, base) ? remote : onClash();
+}
+
+const diagnosisView = (d) => ({
+  name: d.name, aliases: d.aliases || [], reviewed: !!d.reviewed, meds: d.meds.map(blankMed),
+  content: Object.fromEntries(Object.keys(d.content || {}).sort().map((id) => [id, textsOf(d.content[id])]).filter(([, texts]) => texts.length)),
+});
+const medicineView = (m) => ({ aliases: m.aliases || [], ...blankMed(m) });
+
+// When both devices changed the same text, the other wording is kept as a version.
+function mergeContent(base, local, remote) {
+  const content = {};
+  for (const typeId of new Set([...Object.keys(local.content), ...Object.keys(remote.content)])) {
+    const [b, l, r] = [base, local, remote].map((d) => textsOf(d?.content?.[typeId]));
+    const known = [...(local.content[typeId] || []), ...(remote.content[typeId] || [])];
+    const texts = choose(b, l, r, () => [...l, ...r.filter((t) => !l.includes(t))]);
+    if (texts.length) content[typeId] = texts.map((text) => known.find((v) => v.text === text));
+  }
+  return content;
+}
+
+function mergeMeds(base, local, remote) {
+  const [b, l, r] = [base?.meds || [], local.meds, remote.meds].map((meds) => meds.map(blankMed));
+  return choose(b, l, r, () => [...l, ...r.filter((m) => !l.some((x) => nameKey(x.name) === nameKey(m.name)))]);
+}
+
+function mergeDiagnosis(base, local, remote) {
+  const field = (key, empty) => choose(base?.[key] ?? empty, local[key] ?? empty, remote[key] ?? empty);
+  const seen = new Set();
+  const history = [...(local.history || []), ...(remote.history || [])].sort((a, b) => b.at - a.at)
+    .filter((e) => !seen.has(e.at + e.text) && seen.add(e.at + e.text)).slice(0, MAX_HISTORY);
+  const medStats = { ...remote.medStats };
+  for (const [key, count] of Object.entries(local.medStats || {})) medStats[key] = Math.max(count, medStats[key] || 0);
+  return {
+    ...local, syncId: remote.syncId || local.syncId, name: field('name', ''), aliases: field('aliases', []), reviewed: field('reviewed', false),
+    content: mergeContent(base, local, remote), meds: mergeMeds(base, local, remote), history, medStats,
+    useCount: Math.max(local.useCount || 0, remote.useCount || 0), lastUsed: Math.max(local.lastUsed || 0, remote.lastUsed || 0),
+  };
+}
+
+function mergeMedicine(base, local, remote) {
+  const b = base ? medicineView(base) : {};
+  const l = medicineView(local);
+  const r = medicineView(remote);
+  const merged = Object.fromEntries(Object.keys(l).map((key) => [key, choose(b[key], l[key], r[key])]));
+  return { ...local, ...merged, syncId: remote.syncId || local.syncId, useCount: Math.max(local.useCount || 0, remote.useCount || 0) };
+}
+
+const partner = (list, item) => (item.syncId && list.find((x) => x.syncId === item.syncId)) || findExact(list, item.name);
+
+// An item missing on one side was deleted there if the other side has not changed it since.
+function mergeList(base, local, remote, view, mergeItem) {
+  const paired = new Set();
+  const out = [];
+  for (const item of local) {
+    const other = partner(remote, item);
+    const before = partner(base, item);
+    if (other) {
+      paired.add(other);
+      out.push(mergeItem(before, item, other));
+    } else if (!before || !same(view(item), view(before))) {
+      out.push(item);
+    }
+  }
+  for (const item of remote) {
+    if (paired.has(item)) continue;
+    const before = partner(base, item);
+    if (!before || !same(view(item), view(before))) out.push({ ...item, id: uid() });
+  }
+  return out.map((item) => (item.syncId ? item : { ...item, syncId: uid() }));
+}
+
+// The other device may have made the same custom kind of text under a different id.
+function matchTypeIds(local, remote) {
+  let raw = JSON.stringify(remote);
+  for (const type of remote.types) {
+    const mine = findExact(local.types, type.name);
+    if (mine && mine.id !== type.id) raw = raw.replaceAll(`"${type.id}"`, `"${mine.id}"`);
+  }
+  return JSON.parse(raw);
+}
+
+// base is the library as it stood after the last sync, or the starter library on a first sync.
+export function mergeLibraries(base, local, rawRemote) {
+  const earlier = upgradeLibrary(base);
+  const remote = matchTypeIds(local, upgradeLibrary(rawRemote));
+  return {
+    ...local,
+    types: [...local.types, ...remote.types.filter((t) => !local.types.some((x) => x.id === t.id))],
+    summaryOpening: choose(earlier.summaryOpening, local.summaryOpening, remote.summaryOpening),
+    summaryClosing: choose(earlier.summaryClosing, local.summaryClosing, remote.summaryClosing),
+    layout: choose(base.layout, local.layout, remote.layout),
+    diagnoses: mergeList(base.diagnoses, local.diagnoses, remote.diagnoses, diagnosisView, mergeDiagnosis),
+    medicines: mergeList(base.medicines, local.medicines, remote.medicines, medicineView, mergeMedicine),
+  };
+}
+
+// Lets a library keep its current objects, which open screens hold, when only sync ids are new.
+export function copySyncIds(lib, merged) {
+  for (const key of ['diagnoses', 'medicines']) {
+    const ids = new Map(merged[key].map((item) => [item.id, item.syncId]));
+    for (const item of lib[key]) item.syncId = ids.get(item.id) || item.syncId;
+  }
+}
+
+// Ignores ids and list order, which differ between devices.
+export function sameLibrary(a, b) {
+  const sorted = (items, view) => items.map((item) => ({ ...view(item), useCount: item.useCount || 0 })).sort(byName);
+  const view = (lib) => [lib.types.map((t) => t.name).sort(), lib.summaryOpening, lib.summaryClosing, lib.layout.map((s) => s.title),
+    sorted(lib.diagnoses, diagnosisView), sorted(lib.medicines, medicineView)];
+  return same(view(a), view(b));
 }
 
 // Word-level diff for the "what changed" view in the review panel.

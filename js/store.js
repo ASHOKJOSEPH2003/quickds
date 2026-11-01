@@ -1,10 +1,30 @@
-// All data stays in this browser. Storage can be blocked, so reads and writes never throw.
+// Everything is kept in this browser. Storage can be blocked, so reads and writes never throw.
 
-const KEYS = { library: 'dd.library.v1', reports: 'dd.reports.v1', settings: 'dd.settings.v1' };
+const ACCOUNT_KEY = 'dd.account.v1';
+const USER_KEYS = { library: 'dd.library.v1', reports: 'dd.reports.v1', settings: 'dd.settings.v1', synced: 'dd.synced.v1' };
 const memory = new Map();
+let owner = '';
+
+const userKey = (name) => (owner ? `${USER_KEYS[name]}.${owner}` : USER_KEYS[name]);
 
 // A null key means all storage was cleared.
-export const isAppKey = (key) => key === null || Object.values(KEYS).includes(key);
+export const isAppKey = (key) => key === null || key.startsWith('dd.');
+
+// Each account has its own data, so people sharing a computer never see each other's reports.
+// Work from before accounts existed goes to the first person to sign in here.
+export function useAccount(uid) {
+  owner = uid;
+  try {
+    for (const name of Object.keys(USER_KEYS)) {
+      const earlier = localStorage.getItem(USER_KEYS[name]);
+      if (earlier === null) continue;
+      if (localStorage.getItem(userKey(name)) === null) localStorage.setItem(userKey(name), earlier);
+      localStorage.removeItem(USER_KEYS[name]);
+    }
+  } catch {
+    // Blocked storage falls back to memory, which has nothing to move.
+  }
+}
 
 function read(key) {
   try {
@@ -26,12 +46,16 @@ function write(key, value) {
   }
 }
 
-export const loadLibrary = () => read(KEYS.library);
-export const saveLibrary = (lib) => write(KEYS.library, lib);
-export const loadReports = () => read(KEYS.reports) || [];
-export const saveReports = (reports) => write(KEYS.reports, reports);
-export const loadSettings = () => ({ author: '', email: '', reportHeading: '', keepDays: 14, ...(read(KEYS.settings) || {}) });
-export const saveSettings = (settings) => write(KEYS.settings, settings);
+export const loadLibrary = () => read(userKey('library'));
+export const saveLibrary = (lib) => write(userKey('library'), lib);
+export const loadReports = () => read(userKey('reports')) || [];
+export const saveReports = (reports) => write(userKey('reports'), reports);
+export const loadSettings = () => ({ author: '', email: '', reportHeading: '', keepDays: 14, ...(read(userKey('settings')) || {}) });
+export const saveSettings = (settings) => write(userKey('settings'), settings);
+export const loadSynced = () => read(userKey('synced'));
+export const saveSynced = (lib) => write(userKey('synced'), lib);
+export const loadAccount = () => read(ACCOUNT_KEY);
+export const saveAccount = (account) => write(ACCOUNT_KEY, account);
 
 export function purgeOldReports(reports, keepDays, now = Date.now()) {
   const cutoff = now - keepDays * 24 * 60 * 60 * 1000;
