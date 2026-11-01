@@ -1100,13 +1100,21 @@ function boot() {
       registration.addEventListener('updatefound', () => {
         const worker = registration.installing;
         worker?.addEventListener('statechange', () => {
-          if (worker.state === 'activated' && updating) toast('A new version is ready. Close and reopen the app to use it.');
+          if (worker.state === 'activated' && updating) reloadWhenIdle();
         });
       });
     }).catch(showOfflineNotice);
   } else {
     showOfflineNotice();
   }
+}
+
+// Moves to a new version, but not during typing, a dialog, or a report with details left out.
+function reloadWhenIdle() {
+  const busy = document.activeElement?.matches('input, textarea, select') || byId('dialog').open || !S.showIdentifiers;
+  if (busy) { setTimeout(reloadWhenIdle, 2000); return; }
+  saveNow();
+  location.reload();
 }
 
 function showNotice(message) {

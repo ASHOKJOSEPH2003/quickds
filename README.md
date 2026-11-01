@@ -67,7 +67,7 @@ The app shows a permanent "example patients only" notice. Set `TEST_PHASE` to `f
 
 Offline use needs HTTPS, and any static host works: GitHub Pages, Cloudflare Pages or Netlify. Publish this folder as it is. Serving from a plain `http://` address works for trying it out, but the app will show a notice and will not work offline.
 
-When you change any file, bump `VERSION` in `sw.js`. Installed copies pick up the change the next time they open with a connection.
+When you change any file, bump `VERSION` in `sw.js`. Open copies download the change when they next start with a connection, save the draft, and reload themselves once nobody is typing.
 
 ## Development
 
