@@ -215,6 +215,9 @@ pre.out { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/
 
 /* Teach panel */
 .change { border: 1px solid var(--line); border-radius: 6px; padding: 9px; display: grid; gap: 6px; font-size: 13.5px; }
+.save-offer:empty { display: none; }
+.save-offer .change { background: var(--good-soft); border-color: transparent; }
+.save-offer { margin-top: 4px; }
 .diff { font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .diff .added { background: var(--good-soft); color: var(--good); font-weight: 600; }
 .diff .removed { background: var(--bad-soft); color: var(--bad); text-decoration: line-through; }

@@ -181,6 +181,128 @@ test('patient details are scrubbed before text can become a default', () => {
   assert.equal(E.collectChanges(report, lib).length, 0);
 });
 
+test('every keystroke in diagnosis text reaches the report, not only the first', () => {
+  const { lib, report, pick, section } = setup();
+  pick('Anaemia');
+  const block = section('advice').blocks[0];
+  block.text = 'First edit.';
+  E.syncReport(report, lib);
+  block.text = 'First edit. Second edit.';
+  E.syncReport(report, lib);
+  assert.equal(section('advice').blocks[0], block);
+  assert.match(E.sectionText(section('advice'), report), /Second edit\./);
+  assert.equal(E.collectChanges(report, lib)[0].after, 'First edit. Second edit.');
+});
+
+test('a note under a section joins the chosen diagnosis text and is not said twice', () => {
+  const { lib, report, pick, section } = setup();
+  report.patient.name = 'Test Person';
+  const first = pick('Anaemia');
+  const second = pick('Type 2 diabetes mellitus');
+  const advice = section('advice');
+  const before = first.content.advice[0].text;
+  const untouched = second.content.advice[0].text;
+  advice.note = 'Test Person should review in the clinic.';
+  const change = E.collectChanges(report, lib).find((c) => c.kind === 'note');
+  assert.equal(change.after, '{name} should review in the clinic.');
+  assert.equal(change.targets.length, 2);
+  assert.equal(change.scrubbed, true);
+  E.applyChange(change, 'note-default', report, lib, { diagId: first.id });
+  E.syncReport(report, lib);
+  assert.equal(first.content.advice[0].text, `${before}\n\n{name} should review in the clinic.`);
+  assert.equal(second.content.advice[0].text, untouched);
+  assert.equal(advice.note, '');
+  const text = E.sectionText(advice, report);
+  assert.equal(text.match(/review in the clinic/g).length, 1);
+  assert.equal(advice.blocks.find((b) => b.diagId === first.id).text, advice.blocks.find((b) => b.diagId === first.id).base);
+  assert.equal(E.collectChanges(report, lib).length, 0);
+});
+
+test('a note saved as a version keeps the report text and the old default', () => {
+  const { lib, report, pick, section } = setup();
+  const diag = pick('Anaemia');
+  const advice = section('advice');
+  const before = diag.content.advice[0].text;
+  advice.note = 'Extra advice.';
+  E.applyChange(E.collectChanges(report, lib)[0], 'note-version', report, lib, { diagId: diag.id });
+  E.syncReport(report, lib);
+  assert.equal(diag.content.advice[0].text, before);
+  assert.equal(diag.content.advice[1].text, `${before}\n\nExtra advice.`);
+  assert.match(E.sectionText(advice, report), /Extra advice\./);
+  assert.equal(E.collectChanges(report, lib).length, 0);
+});
+
+test('a filled blank section becomes a section of the diagnosis and returns next time', () => {
+  const { lib, report, pick } = setup();
+  const diag = pick('Anaemia');
+  const blank = E.newSection('Follow up', E.SOURCE.NONE, lib);
+  blank.note = 'Clinic in two weeks.';
+  report.sections.push(blank);
+  E.applyChange(E.collectChanges(report, lib).find((c) => c.kind === 'note'), 'note-default', report, lib, { diagId: diag.id });
+  E.syncReport(report, lib);
+  const follow = report.sections.filter((s) => s.title === 'Follow up');
+  assert.equal(follow.length, 1);
+  assert.equal(E.sectionText(follow[0], report).trim(), 'Clinic in two weeks.');
+  assert.equal(E.collectChanges(report, lib).length, 0);
+
+  lib.layout.push({ title: 'Follow up', source: E.SOURCE.NONE });
+  const later = E.newReport(lib);
+  E.addDiagnosisToReport(later, lib, diag.id);
+  E.syncReport(later, lib);
+  const again = later.sections.filter((s) => s.title === 'Follow up');
+  assert.equal(again.length, 1, 'an empty section of the same name is filled, not repeated');
+  assert.equal(E.sectionText(again[0], later).trim(), 'Clinic in two weeks.');
+});
+
+test('a prescription note becomes a section for the diagnosis, once', () => {
+  const { lib, report, pick, section } = setup();
+  const diag = pick('Anaemia');
+  const prescription = section(E.SOURCE.MEDICINES);
+  prescription.note = 'Take iron with water.';
+  E.applyChange(E.collectChanges(report, lib).find((c) => c.kind === 'note'), 'note-default', report, lib, { diagId: diag.id });
+  E.syncReport(report, lib);
+  assert.equal(prescription.note, '');
+  const notes = report.sections.find((s) => s.title === 'Prescription notes');
+  assert.equal(E.sectionText(notes, report).trim(), 'Take iron with water.');
+  assert.ok(report.sections.indexOf(notes) < report.sections.indexOf(prescription));
+});
+
+test('a note on a section another diagnosis lacks gives that diagnosis the section', () => {
+  const { lib, report, pick } = setup();
+  const first = E.findExact(lib.diagnoses, 'Anaemia');
+  const second = E.findExact(lib.diagnoses, 'Type 2 diabetes mellitus');
+  const type = E.addDiagnosisSection(lib, first.id, 'Diet');
+  E.setDefaultText(lib, first.id, type.id, 'Eat greens.');
+  pick('Anaemia');
+  pick('Type 2 diabetes mellitus');
+  const diet = report.sections.find((s) => s.source === type.id);
+  diet.note = 'Less sugar.';
+  E.applyChange(E.collectChanges(report, lib).find((c) => c.kind === 'note'), 'note-default', report, lib, { diagId: second.id });
+  E.syncReport(report, lib);
+  assert.ok(second.sections.includes(type.id));
+  assert.equal(diet.note, '');
+  assert.equal(diet.blocks.length, 2);
+  assert.equal(E.sectionText(diet, report).match(/Less sugar/g).length, 1);
+});
+
+test('choosing just this patient hides a note until it changes', () => {
+  const { lib, report, pick, section } = setup();
+  pick('Anaemia');
+  const advice = section('advice');
+  advice.note = 'Only for this patient.';
+  E.applyChange(E.collectChanges(report, lib)[0], 'skip', report, lib);
+  assert.equal(E.collectChanges(report, lib).length, 0);
+  assert.equal(advice.note, 'Only for this patient.');
+  advice.note = 'Changed again.';
+  assert.equal(E.collectChanges(report, lib).length, 1);
+});
+
+test('nothing is offered for a note with no diagnosis selected', () => {
+  const { lib, report, section } = setup();
+  section('advice').note = 'A note.';
+  assert.equal(E.collectChanges(report, lib).length, 0);
+});
+
 const summaryOf = (report, section) => E.sectionText(section('summary'), report);
 
 test('a summary is one opening, each diagnosis note, then one closing', () => {

@@ -50,6 +50,7 @@ function h(tag, props = {}, ...kids) {
 }
 
 const byId = (id) => document.getElementById(id);
+const saveOffer = (key) => h('div', { class: 'save-offer', 'data-change': key });
 
 let toastTimer;
 function toast(message, undo) {
@@ -579,10 +580,11 @@ function renderSectionBody(section) {
     ];
   }
   if (section.source === SOURCE.NONE) {
-    return h('textarea', {
+    const area = h('textarea', {
       id: `note-${section.id}`, rows: 3, value: section.note, placeholder: `Type ${section.title.toLowerCase()} here`, 'aria-label': section.title,
       oninput: (e) => { section.note = e.target.value; refreshAfterEdit(); },
     });
+    return [area, saveOffer(`note:${section.id}`)];
   }
   const type = S.lib.types.find((t) => t.id === section.source);
   if (!section.blocks.length) {
@@ -592,10 +594,10 @@ function renderSectionBody(section) {
 }
 
 function noteField(section, label) {
-  return h('textarea', {
+  return [h('textarea', {
     id: `note-${section.id}`, rows: 1, value: section.note, placeholder: label, 'aria-label': label,
     oninput: (e) => { section.note = e.target.value; refreshAfterEdit(); },
-  });
+  }), saveOffer(`note:${section.id}`)];
 }
 
 function renderAutoText(section, { label = section.title, textKey = 'text', editedKey = 'edited' } = {}) {
@@ -603,12 +605,13 @@ function renderAutoText(section, { label = section.title, textKey = 'text', edit
     class: 'btn quiet small', type: 'button', hidden: !section[editedKey],
     onclick: () => { section[editedKey] = false; E.syncReport(S.report, S.lib); touchReport(); refreshAll(); },
   }, 'Use automatic text');
+  const shared = h('span', { class: 'hint', hidden: !section[editedKey] }, 'This wording is shared by every diagnosis, so it stays with this patient. Change it under Setup, or put diagnosis wording in the note below.');
   const empty = section.source === SOURCE.DIAGNOSES ? 'Selected diagnoses appear here.' : 'Select a diagnosis and this is written for you.';
   const area = h('textarea', {
     id: `${textKey}-${section.id}`, rows: 2, value: section[textKey] || '', placeholder: empty, 'aria-label': label,
-    oninput: (e) => { section[textKey] = e.target.value; section[editedKey] = true; reset.hidden = false; refreshAfterEdit(); },
+    oninput: (e) => { section[textKey] = e.target.value; section[editedKey] = true; reset.hidden = false; shared.hidden = false; refreshAfterEdit(); },
   });
-  return section.source === SOURCE.SUMMARY ? h('label', { class: 'field' }, label, area, reset) : [area, reset];
+  return section.source === SOURCE.SUMMARY ? h('label', { class: 'field' }, label, area, shared, reset) : [area, reset];
 }
 
 function renderBlock(section, block) {
@@ -648,7 +651,8 @@ function renderBlock(section, block) {
         reset.hidden = same;
         refreshAfterEdit();
       },
-    }));
+    }),
+    saveOffer(`text:${section.id}:${block.diagId}`));
 }
 
 function renderMedicines() {
@@ -679,6 +683,7 @@ function renderMedicine(med) {
     return input;
   };
   const sources = med.fromDiag.map((id) => S.report.diagnoses.find((d) => d.id === id)?.name).filter(Boolean);
+  const offers = [...med.fromDiag.map((id) => `med:${id}:${E.nameKey(med.name)}`), ...(med.manual ? [`add:${E.nameKey(med.name)}`] : [])];
   return h('div', { class: 'med' },
     h('div', { class: 'med-top' },
       h('div', { class: 'med-name' }, med.name, ' ', sources.length ? h('span', { class: 'tag' }, sources.join(', ')) : h('span', { class: 'tag good' }, 'Added')),
@@ -698,7 +703,8 @@ function renderMedicine(med) {
       field('freq', 'Frequency', { list: 'frequencies' }),
       field('duration', 'Duration'),
       field('notes', 'Instructions')),
-    h('datalist', { id: 'frequencies' }, FREQUENCIES.map((f) => h('option', { value: f }))));
+    h('datalist', { id: 'frequencies' }, FREQUENCIES.map((f) => h('option', { value: f }))),
+    offers.map(saveOffer));
 }
 
 function medicinePicker(onPick, id) {
@@ -855,6 +861,10 @@ function renderOutput() {
 
   host.replaceChildren(...[outputCard, teachCard, sendCard].filter(Boolean));
   host.scrollTop = scroll;
+  for (const offer of document.querySelectorAll('[data-change]')) {
+    const change = changes.find((c) => c.key === offer.dataset.change);
+    offer.replaceChildren(...(change ? [renderChange(change, true)] : []));
+  }
 }
 
 function reportDocument() {
@@ -881,24 +891,43 @@ function printReport() {
   window.print();
 }
 
-function renderChange(change) {
+// The same choice appears under the edited text (brief) and in Save for next time (with the comparison).
+function renderChange(change, brief = false) {
   const act = (action, opts) => {
     E.applyChange(change, action, S.report, S.lib, { by: S.settings.author, ...opts });
     E.syncReport(S.report, S.lib);
     touchReport();
     saveNow();
     refreshAll();
-    if (action !== 'skip') toast('Saved for future reports.');
+    if (action !== 'skip') toast('Saved to the Library.');
   };
   const button = (label, action, cls = '', opts) => h('button', { class: `btn small ${cls}`, type: 'button', onclick: () => act(action, opts && opts()) }, label);
   const skip = button('Just this patient', 'skip', 'quiet');
 
+  const cautions = [
+    change.warn && h('div', { class: 'alert' }, 'This may still hold a patient number or date. Remove it before saving.'),
+    change.scrubbed && h('span', { class: 'hint' }, 'The name, age, numbers and dates here are saved as placeholders.'),
+  ];
   if (change.kind === 'text') {
     return h('div', { class: 'change' },
-      h('strong', {}, `${change.diagName}: ${change.sectionTitle}`),
-      h('div', { class: 'diff' }, E.diffWords(change.before, change.after).map((p) => (p.kind === 'same' ? p.text : h('span', { class: p.kind }, p.text)))),
-      change.warn && h('div', { class: 'alert' }, 'This may still hold a patient number or date. Remove it before saving.'),
+      h('strong', {}, brief ? `Save this to the Library for ${change.diagName}?` : `${change.diagName}: ${change.sectionTitle}`),
+      !brief && h('div', { class: 'diff' }, E.diffWords(change.before, change.after).map((p) => (p.kind === 'same' ? p.text : h('span', { class: p.kind }, p.text)))),
+      cautions,
       h('div', { class: 'row' }, button('Make default', 'default', 'primary'), button('Save as a version', 'version'), skip));
+  }
+  if (change.kind === 'note') {
+    const section = S.report.sections.find((s) => s.id === change.sectionId);
+    const chosen = change.targets.some((d) => d.id === section.saveTo) ? section.saveTo : change.targets[0].id;
+    const select = change.targets.length > 1 && h('select', {
+      value: chosen, 'aria-label': 'Save for which diagnosis',
+      onchange: (e) => { section.saveTo = e.target.value; touchReport(); renderOutput(); },
+    }, change.targets.map((d) => h('option', { value: d.id }, d.name)));
+    const diagId = () => ({ diagId: chosen });
+    return h('div', { class: 'change' },
+      h('strong', {}, `Save this to the Library for ${select ? 'a diagnosis' : change.targets[0].name}?`),
+      !brief && h('span', {}, `${change.sectionTitle}: ${change.after}`),
+      select, cautions,
+      h('div', { class: 'row' }, button('Make default', 'note-default', 'primary', diagId), button('Save as a version', 'note-version', '', diagId), skip));
   }
   if (change.kind === 'med-add') {
     const select = change.targets.length > 1 && h('select', { id: `target-${change.key}`, 'aria-label': 'Add to which diagnosis' }, change.targets.map((d) => h('option', { value: d.id }, d.name)));

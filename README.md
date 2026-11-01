@@ -14,7 +14,7 @@ It runs in any browser, installs on a phone, and works with no internet. Everyon
 6. Fill the yellow medicine fields. An empty dose, frequency or duration appears in the report as `[dose?]`, so it cannot be missed.
 7. Copy one section at a time or the whole report, or send it by WhatsApp or email, then paste it into the hospital system. The hospital system takes plain text, so copying always gives plain text.
 8. For a report on paper or as a file, switch the Report panel to **Formatted** and press **Print or PDF**. Choose Save as PDF in the print window. It follows the same **Include patient details** setting as the text.
-9. Under **Save for next time**, choose what future reports should use, then press **Finish report**.
+9. Whenever a section changes, a choice appears right under it to save that text to the Library for the diagnosis. The same choices are gathered under **Save for next time** before you press **Finish report**.
 
 ## Sections for one diagnosis
 
@@ -28,7 +28,7 @@ Every summary has three parts, in this order, however many diagnoses are selecte
 2. **A note for each diagnosis** that has one, written in the Library. It holds only what is specific to that diagnosis, such as the treatment given.
 3. **Closing:** one sentence with all the medicines.
 
-The opening and closing wording is set once under **Setup > Summary wording**. In a report, all three parts can be edited for that patient. Only notes can be saved back to a diagnosis.
+The opening and closing wording is set once under **Setup > Summary wording** and is shared by every diagnosis. In a report, all three parts can be edited for that patient, but only notes can be saved back to a diagnosis.
 
 ## How it learns
 
@@ -37,6 +37,9 @@ The opening and closing wording is set once under **Setup > Summary wording**. I
 | A paragraph is edited | Shows a word-by-word comparison with three choices: make default, save as a version, or just this patient |
 | Patient details appear in that text | Replaces name, age, numbers and dates with placeholders before saving, and warns about any number or date left over |
 | A diagnosis note in the summary is edited | Same choices, saved as that diagnosis's note |
+| A note is added under a section | Same choices. The note joins that diagnosis's text, and with several diagnoses you pick which |
+| A blank section is filled in | Same choices. It becomes a section for that diagnosis, under the same name |
+| Other prescription notes are added | Same choices, saved as a Prescription notes section for that diagnosis |
 | A dose or duration is filled in | Offers to save it as the default for that diagnosis |
 | A medicine is added or removed | Offers to update the diagnosis defaults, and shows how many times it was added by hand before |
 | A report is finished | Updates usage counts, which reorder the Most used list |

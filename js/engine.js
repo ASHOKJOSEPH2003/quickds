@@ -161,8 +161,11 @@ function addOwnSections(report, lib) {
   for (const d of report.diagnoses) {
     for (const typeId of getDiag(lib, d.id)?.sections || []) {
       if (!own.has(typeId) || report.sections.some((s) => s.source === typeId) || report.dismissed?.includes(typeId)) continue;
+      const title = lib.types.find((t) => t.id === typeId).name;
+      const waiting = report.sections.find((s) => s.source === SOURCE.NONE && !s.note && nameKey(s.title) === nameKey(title));
+      if (waiting) { Object.assign(waiting, { source: typeId, auto: true }); continue; }
       const prescription = report.sections.findIndex((s) => s.source === SOURCE.MEDICINES);
-      const section = { ...newSection(lib.types.find((t) => t.id === typeId).name, typeId, lib), auto: true };
+      const section = { ...newSection(title, typeId, lib), auto: true };
       report.sections.splice(prescription < 0 ? report.sections.length : prescription, 0, section);
     }
   }
@@ -186,8 +189,9 @@ export function syncReport(report, lib) {
       const versions = versionsOf(diag, s.source);
       const version = versions.find((v) => v.id === found?.versionId) || versions[0];
       const base = version ? fill(version.text, withDiagnoses(ctx, [d])) : '';
-      if (!found || found.text === found.base) return { diagId: d.id, versionId: version?.id || null, text: base, base };
-      return { ...found, versionId: version?.id || null, base };
+      if (!found) return { diagId: d.id, versionId: version?.id || null, text: base, base };
+      // The same object stays in place: the text box being typed in holds on to it.
+      return Object.assign(found, { versionId: version?.id || null, base, ...(found.text === found.base && { text: base }) });
     });
     if (own.has(s.source)) s.blocks = s.blocks.filter((b) => hasOwnSection(lib, b.diagId, s.source));
     if (isSummary && !s.edited) s.text = generated(lib.summaryOpening);
@@ -500,6 +504,7 @@ export function collectChanges(report, lib) {
     const signature = change.after ?? change.signature ?? '';
     if (report.learned[change.key] !== signature) changes.push(change);
   };
+  const targets = report.diagnoses.filter((d) => getDiag(lib, d.id));
 
   for (const s of report.sections) {
     const clean = s.source === SOURCE.SUMMARY ? scrubSummary : scrub;
@@ -512,11 +517,15 @@ export function collectChanges(report, lib) {
       const version = versions.find((v) => v.id === b.versionId) || versions[0];
       const after = clean(text, report);
       add({ kind: 'text', key: `text:${s.id}:${b.diagId}`, diagId: b.diagId, diagName: diag.name, typeId: s.source,
-        sectionTitle: s.title, before: version?.text || '', after, warn: looksPatientSpecific(after) });
+        sectionTitle: s.title, before: version?.text || '', after, warn: looksPatientSpecific(after), scrubbed: after !== text });
+    }
+    const note = (s.note || '').trim();
+    if (note && targets.length) {
+      const after = clean(note, report);
+      add({ kind: 'note', key: `note:${s.id}`, sectionId: s.id, sectionTitle: s.title, targets, after, warn: looksPatientSpecific(after), scrubbed: after !== note });
     }
   }
 
-  const targets = report.diagnoses.filter((d) => getDiag(lib, d.id));
   for (const m of report.meds) {
     if (m.manual && targets.length) {
       const seen = Math.max(...targets.map((d) => getDiag(lib, d.id).medStats?.[nameKey(m.name)] || 0));
@@ -544,7 +553,50 @@ export function collectChanges(report, lib) {
   return changes;
 }
 
+// A blank section keeps its name in the Library. Prescription notes get a section of their own,
+// because the medicines themselves have no text to join.
+function noteType(section, lib, diagId) {
+  if (isContentSource(lib, section.source)) {
+    const current = lib.types.find((t) => t.id === section.source);
+    if (current.own) addDiagnosisSection(lib, diagId, current.name);
+    return current.id;
+  }
+  const name = section.source === SOURCE.MEDICINES ? `${cleanName(section.title)} notes` : cleanName(section.title) || 'Notes';
+  const type = findExact(lib.types, name);
+  if (type && !type.own) return type.id;
+  addDiagnosisSection(lib, diagId, name);
+  return findExact(lib.types, name).id;
+}
+
+// The note moves into the diagnosis text, so the report keeps saying it once.
+function saveNote(change, keep, report, lib, by, diagId) {
+  const section = report.sections.find((s) => s.id === change.sectionId);
+  const diag = getDiag(lib, diagId);
+  if (!section || !diag) return;
+  const joins = isContentSource(lib, section.source);
+  const block = section.blocks.find((b) => b.diagId === diagId);
+  const typeId = noteType(section, lib, diagId);
+  const joined = joins ? versionsOf(diag, typeId).find((v) => v.id === block?.versionId)?.text : '';
+  const text = [joined, change.after].filter(Boolean).join('\n\n');
+  keep(lib, diagId, typeId, text, by);
+  const versions = versionsOf(diag, typeId);
+  const version = versions.find((v) => v.text === text);
+  const own = lib.types.find((t) => t.id === typeId)?.own;
+  report.dismissed = (report.dismissed || []).filter((id) => id !== typeId);
+  if (joins) {
+    if (block) Object.assign(block, { versionId: version.id, text: [block.text, section.note.trim()].filter(Boolean).join('\n\n') });
+    else section.blocks.push({ diagId, versionId: version.id, text: '', base: '' });
+    section.note = '';
+  } else if (section.source === SOURCE.MEDICINES) {
+    if (own && version === versions[0]) section.note = '';
+  } else if (!report.sections.some((s) => s.source === typeId)) {
+    Object.assign(section, { source: typeId, note: '', blocks: [{ diagId, versionId: version.id, text: '', base: '' }], ...(own && { auto: true }) });
+  }
+}
+
 export function applyChange(change, action, report, lib, { by = '', diagId } = {}) {
+  if (action === 'note-default') saveNote(change, setDefaultText, report, lib, by, diagId);
+  if (action === 'note-version') saveNote(change, addVersion, report, lib, by, diagId);
   if (action === 'default') setDefaultText(lib, change.diagId, change.typeId, change.after, by);
   if (action === 'version') addVersion(lib, change.diagId, change.typeId, change.after, by);
   if (action === 'add-med') setDiagnosisMedicine(lib, diagId, change.med);
